@@ -29,20 +29,21 @@ aliases; SSH Sessions can supply its machine catalog and the route for this devi
 
 ## Install
 
-> **0.2.0 release candidate:** the commands below target the new release.
-> Its assets and HTTPS installation checks are pending. The qualified published
-> version is [0.1.0](https://github.com/brant92good/ssh-files/tree/v0.1.0#install).
+> **0.3.0 prerelease.** The commands below use this version's compiled assets.
+> Check [downloads and release status](https://github.com/brant92good/ssh-files/releases/tag/v0.3.0)
+> for availability; [qualification results](docs/verification.md) record the checks.
+> The previous verified release is [0.2.0](https://github.com/brant92good/ssh-files/tree/v0.2.0#install).
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/brant92good/ssh-files/v0.2.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/brant92good/ssh-files/v0.3.0/install.ps1 | iex
 ```
 
 Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/brant92good/ssh-files/v0.2.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/brant92good/ssh-files/v0.3.0/install.sh | sh
 ```
 
 The installer downloads a compiled binary, verifies its checksum, and adds the
@@ -73,6 +74,9 @@ and hardlink support on the destination filesystem. [Connection details](docs/us
 | Tab, arrows, Enter | Switch panes, select, open a folder |
 | Type, F3 | Filter files; edit or clear the filter |
 | Space | Mark or unmark an entry |
+| Ctrl+A / Ctrl+Shift+A | Select the filtered list / clear marks |
+| Ctrl+O | Cycle name and size sorting |
+| Insert, then F9 | Create a folder in the selected pane |
 | . | Show or hide hidden files when the filter is empty |
 | F5 | Review selected uploads or downloads |
 | F9 / Ctrl+S | Start the reviewed queue |
@@ -83,6 +87,8 @@ and hardlink support on the destination filesystem. [Connection details](docs/us
 You can also click to select, double-click to open a folder, and scroll the pane
 under the pointer. Ctrl-click toggles a mark; Shift-click or dragging selects a
 range. [Mouse controls and limits](docs/usage.md#browse-and-select).
+The [feature inventory](docs/file-manager.md) spells out what is implemented and
+where a shell or another file-transfer tool is still needed.
 
 ![Reviewing destinations before a transfer starts](docs/assets/review.svg)
 
@@ -93,8 +99,9 @@ In the review, **F2** changes a destination name and **Delete** skips an item.
 
 People who work in a terminal but still want to see both sides before copying
 builds, datasets, logs, or project files. It works as a standalone app. In
-[SSH Sessions 0.7.0](https://github.com/brant92good/ssh-session-tui/releases/tag/v0.7.0),
-press **X** to open Files using the selected machine and device route.
+[SSH Sessions 0.8.0](https://github.com/brant92good/ssh-session-tui/releases/tag/v0.8.0),
+run `ssh-sessions files` to choose a group, server and saved path, or press **X**
+on a machine. Files receives the selected device route.
 
 Use `scp` for a quick known-path copy, or `rsync` when you need synchronization
 or resumable bulk transfers. SSH Files is for browsing and reviewing a batch

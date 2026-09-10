@@ -265,6 +265,110 @@ fn owned_terminal_hidden_toggle_and_literal_filter_editor() {
 }
 
 #[test]
+fn owned_terminal_select_all_sort_and_create_folder_use_actual_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config");
+    std::fs::write(&config, "Host fixture\n HostName 127.0.0.1\n Port 1\n IdentityAgent none\n UserKnownHostsFile none\n").unwrap();
+    let local = root.path().join("files");
+    std::fs::create_dir(&local).unwrap();
+    std::fs::write(local.join("aaa-small"), b"x").unwrap();
+    std::fs::write(local.join("zzz-large"), b"longer contents").unwrap();
+    std::fs::write(local.join(".hidden"), b"keep hidden").unwrap();
+    let local = local.canonicalize().unwrap();
+    let mut session = Session::start(&config, &local, ".");
+    session.expect("zzz-large");
+    session.expect("SSH:"); // The other pane has failed; local creation is still available.
+    session.send("\x01");
+    session.expect("2 marked");
+    #[cfg(windows)]
+    session.send("\x1b[65;30;1;1;24;1_\x1b[65;30;1;0;24;1_");
+    #[cfg(unix)]
+    session.send("\x1b[65;6u");
+    session.expect("Selection cleared.");
+    session.expect("0 marked");
+    session.send("\x0f");
+    session.expect("Sort: Name ↓");
+    assert!(session.position("zzz-large").1 < session.position("aaa-small").1);
+    session.send("\x0f");
+    session.expect("Sort: Size ↑");
+    assert!(session.position("aaa-small").1 < session.position("zzz-large").1);
+    session.send("\x1b[2~");
+    session.expect("Create local folder");
+    session.send("wrong-name\x01new folder\r");
+    session.settle();
+    assert!(
+        session
+            .parser
+            .screen()
+            .contents()
+            .contains("Name: new folder")
+    );
+    assert!(!local.join("new folder").exists());
+    session.send(F9);
+    session.expect("3 shown");
+    assert!(local.join("new folder").is_dir());
+    assert!(!local.join("wrong-name").exists());
+    session.send("\x1b[2~new folder");
+    session.expect("Name: new folder");
+    session.send(F9);
+    session.expect("already exists");
+    assert_eq!(std::fs::read(local.join("aaa-small")).unwrap(), b"x");
+    session.resize(16, 60);
+    session.send("\x1bOP");
+    session.expect("Keyboard");
+    session.send("\x1b[6~\x1b[6~\x1b[6~");
+    session.expect("Esc closes this help.");
+    session.send("\x1b[H");
+    session.expect("Switch local / remote pane");
+    session.exit();
+}
+
+#[test]
+#[ignore = "Requires explicit disposable SFTP fixture environment; never uses user SSH files"]
+fn actual_sftp_create_folder_has_explicit_confirmation_and_preserves_existing_entries() {
+    let config = std::env::var_os("SSH_FILES_TEST_CONFIG").expect("SSH_FILES_TEST_CONFIG");
+    let server = std::path::PathBuf::from(
+        std::env::var_os("SSH_FILES_TEST_REMOTE").expect("SSH_FILES_TEST_REMOTE"),
+    );
+    let target = tempfile::Builder::new()
+        .prefix("mkdir-owned-")
+        .tempdir_in(&server)
+        .unwrap();
+    let local = tempfile::tempdir().unwrap();
+    std::fs::write(target.path().join("kept.txt"), b"original bytes").unwrap();
+    std::fs::write(local.path().join("local-ready"), b"ready").unwrap();
+    let remote = target.path().to_str().unwrap().replace('\\', "/");
+    let mut session = Session::start(
+        Path::new(&config),
+        &local.path().canonicalize().unwrap(),
+        &remote,
+    );
+    session.expect("kept.txt");
+    session.expect("local-ready");
+    session.send("\t\x1b[2~");
+    session.expect("Create remote folder");
+    session.send("folder 開發\r");
+    session.settle();
+    assert!(!target.path().join("folder 開發").exists());
+    session.send(F9);
+    session.expect("2 shown");
+    assert!(target.path().join("folder 開發").is_dir());
+    session.send("\x1b[2~kept.txt");
+    session.expect("Name: kept.txt");
+    session.send(F9);
+    session.expect("already exists");
+    assert_eq!(
+        std::fs::read(target.path().join("kept.txt")).unwrap(),
+        b"original bytes"
+    );
+    session.send("\x1b");
+    session.expect("F6 paste paths");
+    session.send("folder 開發\r");
+    session.expect("0 shown");
+    session.exit();
+}
+
+#[test]
 fn owned_terminal_sgr_mouse_selects_ranges_scrolls_hovered_pane_and_opens_folder() {
     let root = tempfile::tempdir().unwrap();
     let config = root.path().join("config");
@@ -667,5 +771,202 @@ fn actual_stalled_transfer_cancel_close_and_navigation_ownership() {
             started.elapsed().as_secs_f64()
         );
         drop(session);
+    }
+}
+
+#[cfg(windows)]
+fn owned_ssh_handles(parent: u32) -> Vec<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+                QueryFullProcessImageNameW,
+            },
+        },
+    };
+    let expected = which::which("ssh").unwrap().canonicalize().unwrap();
+    let mut result = Vec::new();
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        assert_ne!(snapshot, INVALID_HANDLE_VALUE);
+        let _snapshot = OwnedHandle::from_raw_handle(snapshot);
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut present = Process32FirstW(snapshot, &mut entry);
+        while present != 0 {
+            if entry.th32ParentProcessID == parent {
+                let name = String::from_utf16_lossy(
+                    &entry.szExeFile[..entry.szExeFile.iter().position(|c| *c == 0).unwrap()],
+                );
+                if name.eq_ignore_ascii_case("ssh.exe") {
+                    let raw = OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                        0,
+                        entry.th32ProcessID,
+                    );
+                    assert!(!raw.is_null(), "Cannot inspect owned SSH child");
+                    let handle = OwnedHandle::from_raw_handle(raw);
+                    let mut image = vec![0u16; 32768];
+                    let mut size = image.len() as u32;
+                    assert_ne!(
+                        QueryFullProcessImageNameW(raw, 0, image.as_mut_ptr(), &mut size),
+                        0
+                    );
+                    let actual =
+                        std::path::PathBuf::from(String::from_utf16_lossy(&image[..size as usize]));
+                    assert_eq!(actual.canonicalize().unwrap(), expected);
+                    result.push(handle);
+                }
+            }
+            present = Process32NextW(snapshot, &mut entry);
+        }
+    }
+    assert_eq!(
+        result.len(),
+        1,
+        "Folder creation must own only its browser SSH session"
+    );
+    result
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "Requires an explicit owned Windows SFTP fixture with --drop-mkdir-ack"]
+fn actual_mkdir_lost_ack_cancel_and_close_retain_path_and_stop_owned_ssh() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+        System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+    };
+    let config = std::path::PathBuf::from(
+        std::env::var_os("SSH_FILES_TEST_CONFIG").expect("SSH_FILES_TEST_CONFIG"),
+    );
+    let fixture = config.parent().unwrap().canonicalize().unwrap();
+    let ready: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.join("ready.json")).unwrap()).unwrap();
+    assert_eq!(
+        ready["drop_mkdir_ack"], true,
+        "Requires the explicit MKDIR fault fixture"
+    );
+    assert_eq!(
+        std::path::PathBuf::from(ready["config"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        config.canonicalize().unwrap()
+    );
+    let server = std::path::PathBuf::from(
+        std::env::var_os("SSH_FILES_TEST_REMOTE").expect("SSH_FILES_TEST_REMOTE"),
+    );
+    assert_eq!(
+        server.canonicalize().unwrap(),
+        std::path::PathBuf::from(ready["remote"].as_str().unwrap())
+            .canonicalize()
+            .unwrap()
+    );
+    assert_eq!(server.canonicalize().unwrap().parent().unwrap(), fixture);
+    let marker = fixture.join("suppressed-ack.json");
+    for mode in ["cancel", "close"] {
+        let target = tempfile::Builder::new()
+            .prefix("mkdir-ack-")
+            .tempdir_in(&server)
+            .unwrap();
+        let local = tempfile::tempdir().unwrap();
+        std::fs::write(local.path().join("local-ready"), b"owned").unwrap();
+        std::fs::write(target.path().join("kept.txt"), b"unchanged").unwrap();
+        let child_name = format!("lost-ack-{mode}-開發");
+        let final_path = target.path().join(&child_name);
+        // Windows OpenSSH REALPATH returns /C:/... for its POSIX SFTP namespace.
+        // The owned directory still has the exact C:/... Windows identity below.
+        let wire_final = format!("/{}", final_path.to_str().unwrap().replace('\\', "/"));
+        let remote = target.path().to_str().unwrap().replace('\\', "/");
+        let mut session = Session::start(&config, &local.path().canonicalize().unwrap(), &remote);
+        session.expect("local-ready");
+        session.expect("kept.txt");
+        session.send("\t\x1b[2~");
+        session.expect("Create remote folder");
+        session.send(&child_name);
+        session.send(F9);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let receipt = loop {
+            if let Some(receipt) = std::fs::read(&marker)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                && receipt["destination"].as_str() == Some(wire_final.as_str())
+            {
+                break receipt;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "No exact successful MKDIR reply was withheld: {}",
+                session.parser.screen().contents()
+            );
+            session.pump(Duration::from_millis(10));
+        };
+        assert_eq!(
+            receipt["event"],
+            "actual-server-successful-mkdir-status-suppressed"
+        );
+        assert_eq!(receipt["request_type"], 14);
+        assert_eq!(receipt["status"], 0);
+        assert!(receipt["request_id"].as_u64().is_some());
+        assert!(
+            final_path.is_dir(),
+            "Real server must create the folder before dropping its ACK"
+        );
+        let mut handles = owned_ssh_handles(session.child.process_id().unwrap());
+        for key in ["relay_pid", "server_pid"] {
+            let pid = u32::try_from(receipt[key].as_u64().unwrap()).unwrap();
+            let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            assert!(!raw.is_null(), "Cannot inspect exact fixture {key}");
+            handles.push(unsafe { OwnedHandle::from_raw_handle(raw) });
+        }
+        for handle in &handles {
+            assert_eq!(
+                unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) },
+                WAIT_TIMEOUT
+            );
+        }
+        let started = Instant::now();
+        if mode == "cancel" {
+            session.send("\x1b");
+            session.expect("could not be confirmed");
+        }
+        session.exit();
+        // Read the primary-screen report after the real terminal guard restores it.
+        session.expect("could not be confirmed");
+        session.expect(&child_name);
+        assert!(!session.parser.screen().alternate_screen());
+        for handle in &handles {
+            assert_eq!(
+                unsafe { WaitForSingleObject(handle.as_raw_handle(), 4000) },
+                WAIT_OBJECT_0,
+                "Owned client/relay/server process survived {mode}"
+            );
+        }
+        assert!(started.elapsed() < Duration::from_secs(8));
+        assert!(
+            final_path.is_dir(),
+            "Uncertain creation must not be removed"
+        );
+        assert_eq!(
+            std::fs::read(target.path().join("kept.txt")).unwrap(),
+            b"unchanged"
+        );
+        assert_eq!(
+            std::fs::read_dir(target.path()).unwrap().count(),
+            2,
+            "No automatic retry or extra mutation"
+        );
+        println!(
+            "PASS: actual MKDIR status 0 withheld for exact request {}; {mode} printed uncertain path, kept created folder and closed owned SSH/relay/server in {:.2}s",
+            receipt["request_id"],
+            started.elapsed().as_secs_f64()
+        );
     }
 }

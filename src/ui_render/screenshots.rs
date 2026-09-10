@@ -125,6 +125,17 @@ fn capture_native_widgets() {
         &output.join("browser.svg"),
         "SSH Files: local and remote file panes rendered by the native application",
     );
+    app.status = "Choose a folder name, then press F9 to create it.".into();
+    app.modal = Some(Modal::CreateFolder(crate::folders::Request {
+        local: false,
+        parent: "/srv/project".into(),
+        name: "checkpoints-2026".into(),
+    }));
+    save(
+        &app,
+        &output.join("create-folder.svg"),
+        "SSH Files: create-folder form before explicit F9 confirmation",
+    );
     app.modal = Some(Modal::Review {
         jobs: vec![
             Job {

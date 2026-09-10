@@ -227,6 +227,37 @@ impl Browser {
         Ok(())
     }
 
+    pub async fn create_new_directory(
+        &self,
+        parent: &str,
+        path: &str,
+        started: &AtomicBool,
+    ) -> Result<()> {
+        crate::valid_remote(path)?;
+        ensure!(path.len() <= 4096, "Remote path is too long");
+        ensure!(
+            self.attributes(path).await?.is_none(),
+            "An entry with this name already exists"
+        );
+        ensure!(
+            self.attributes(parent)
+                .await?
+                .is_some_and(|attrs| attrs.file_type().is_dir()),
+            "Parent is no longer a regular directory"
+        );
+        started.store(true, Ordering::Release);
+        self.session
+            .mkdir(
+                path,
+                FileAttributes {
+                    permissions: Some(0o700),
+                    ..FileAttributes::default()
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn shutdown(self) -> Result<String> {
         let _ = self.session.close_session();
         self.connection.shutdown().await

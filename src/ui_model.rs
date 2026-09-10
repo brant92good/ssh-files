@@ -5,6 +5,33 @@ use crate::{
 use anyhow::{Result, ensure};
 use std::collections::BTreeSet;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Name,
+    NameDescending,
+    Size,
+    SizeDescending,
+}
+impl Sort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name ↑",
+            Self::NameDescending => "Name ↓",
+            Self::Size => "Size ↑",
+            Self::SizeDescending => "Size ↓",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Name => Self::NameDescending,
+            Self::NameDescending => Self::Size,
+            Self::Size => Self::SizeDescending,
+            Self::SizeDescending => Self::Name,
+        }
+    }
+}
+
 pub struct Pane {
     pub path: String,
     pub entries: Vec<Entry>,
@@ -15,6 +42,7 @@ pub struct Pane {
     pub show_hidden: bool,
     pub revision: u64,
     pub offset: usize,
+    pub sort: Sort,
 }
 
 impl Pane {
@@ -29,6 +57,7 @@ impl Pane {
             show_hidden: false,
             revision: 0,
             offset: 0,
+            sort: Sort::default(),
         }
     }
     pub fn replace(&mut self, listing: Listing) {
@@ -61,6 +90,36 @@ impl Pane {
             })
             .map(|(index, _)| index)
             .collect();
+        use std::cmp::Reverse;
+        let entries = &self.entries;
+        match self.sort {
+            Sort::Name => self.visible.sort_by_cached_key(|i| {
+                (
+                    entries[*i].kind != crate::browser::Kind::Directory,
+                    paths::collision_key(&entries[*i].name),
+                )
+            }),
+            Sort::NameDescending => self.visible.sort_by_cached_key(|i| {
+                (
+                    entries[*i].kind != crate::browser::Kind::Directory,
+                    Reverse(paths::collision_key(&entries[*i].name)),
+                )
+            }),
+            Sort::Size => self.visible.sort_by_cached_key(|i| {
+                (
+                    entries[*i].kind != crate::browser::Kind::Directory,
+                    entries[*i].size,
+                    paths::collision_key(&entries[*i].name),
+                )
+            }),
+            Sort::SizeDescending => self.visible.sort_by_cached_key(|i| {
+                (
+                    entries[*i].kind != crate::browser::Kind::Directory,
+                    Reverse(entries[*i].size),
+                    paths::collision_key(&entries[*i].name),
+                )
+            }),
+        }
         self.cursor = self.cursor.min(self.visible.len().saturating_sub(1));
         if let Some(name) = previous {
             self.restore_cursor(&name);
@@ -85,6 +144,25 @@ impl Pane {
     pub fn set_show_hidden(&mut self, show: bool) {
         self.show_hidden = show;
         self.refilter();
+    }
+    pub fn cycle_sort(&mut self) {
+        self.sort = self.sort.next();
+        self.refilter();
+    }
+    pub fn select_all(&mut self) -> Result<()> {
+        let selected: BTreeSet<_> = self
+            .visible
+            .iter()
+            .map(|i| &self.entries[*i])
+            .filter(|entry| entry.rejected.is_none() && entry.kind != crate::browser::Kind::Other)
+            .map(|entry| entry.name.clone())
+            .collect();
+        ensure!(
+            selected.len() <= paths::QUEUE_LIMIT,
+            "Select at most 1,000 entries; selection was unchanged"
+        );
+        self.marked = selected;
+        Ok(())
     }
     pub fn current(&self) -> Option<&Entry> {
         self.visible
@@ -160,6 +238,7 @@ pub enum EditKind {
 }
 #[derive(Clone)]
 pub enum Modal {
+    CreateFolder(crate::folders::Request),
     Review {
         jobs: Vec<crate::plan::Job>,
         cursor: usize,
@@ -168,7 +247,9 @@ pub enum Modal {
         kind: EditKind,
         text: String,
     },
-    Help,
+    Help {
+        scroll: u16,
+    },
     Quit,
     Details {
         body: String,
@@ -253,5 +334,89 @@ mod tests {
         });
         assert!(pane.marked.is_empty());
         assert!(pane.selected().is_err());
+    }
+
+    #[test]
+    fn select_all_is_filtered_supported_and_atomic_at_the_limit() {
+        let mut pane = Pane::new("/fixture".into());
+        let mut data = listing();
+        let mut rejected = data.entries[1].clone();
+        rejected.name = "unsafe.rs".into();
+        rejected.rejected = Some("unsafe".into());
+        data.entries.push(rejected);
+        let mut other = data.entries[1].clone();
+        other.name = "pipe.rs".into();
+        other.kind = Kind::Other;
+        data.entries.push(other);
+        pane.replace(data);
+        pane.select_all().unwrap();
+        assert_eq!(pane.marked, BTreeSet::from(["main.rs".into()]));
+        pane.set_show_hidden(true);
+        pane.filter = ".rs".into();
+        pane.refilter();
+        pane.select_all().unwrap();
+        assert_eq!(pane.marked.len(), 1);
+        let mut data = listing();
+        data.entries = (0..=paths::QUEUE_LIMIT)
+            .map(|i| Entry {
+                name: format!("file-{i:04}"),
+                kind: Kind::File,
+                size: i as u64,
+                hidden: false,
+                rejected: None,
+            })
+            .collect();
+        pane.filter.clear();
+        pane.replace(data);
+        pane.marked.insert("file-0001".into());
+        let before = pane.marked.clone();
+        assert!(pane.select_all().is_err());
+        assert_eq!(pane.marked, before);
+    }
+
+    #[test]
+    fn sorting_keeps_folders_first_and_selection_by_identity() {
+        let mut pane = Pane::new("/fixture".into());
+        pane.replace(Listing {
+            path: "/fixture".into(),
+            inspected: 3,
+            entries: [
+                ("folder", Kind::Directory, 999),
+                ("small", Kind::File, 1),
+                ("large", Kind::File, 42),
+            ]
+            .into_iter()
+            .map(|(name, kind, size)| Entry {
+                name: name.into(),
+                kind,
+                size,
+                hidden: false,
+                rejected: None,
+            })
+            .collect(),
+        });
+        pane.cursor = 1;
+        let selected = pane.current().unwrap().name.clone();
+        pane.toggle().unwrap();
+        let revision = pane.revision;
+        for (sort, names) in [
+            (Sort::NameDescending, vec!["folder", "small", "large"]),
+            (Sort::Size, vec!["folder", "small", "large"]),
+            (Sort::SizeDescending, vec!["folder", "large", "small"]),
+            (Sort::Name, vec!["folder", "large", "small"]),
+        ] {
+            pane.cycle_sort();
+            assert_eq!(pane.sort, sort);
+            assert_eq!(
+                pane.visible
+                    .iter()
+                    .map(|i| pane.entries[*i].name.as_str())
+                    .collect::<Vec<_>>(),
+                names
+            );
+            assert_eq!(pane.current().unwrap().name, selected);
+            assert!(pane.marked.contains(&selected));
+        }
+        assert_eq!(pane.revision, revision + 4);
     }
 }

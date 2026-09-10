@@ -21,6 +21,10 @@ use std::{
     io::{self, IsTerminal, Write},
     path::PathBuf,
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -62,6 +66,14 @@ pub(crate) struct App {
     retained: Vec<String>,
     pending_review: Option<Vec<Job>>,
     pointer: crate::pointer::Pointer,
+    creating: Option<Creation>,
+    shutting_down: bool,
+    help_scroll_limit: u16,
+}
+
+struct Creation {
+    request: crate::folders::Request,
+    started: Arc<AtomicBool>,
 }
 
 impl App {
@@ -103,6 +115,9 @@ impl App {
             retained: Vec::new(),
             pending_review: None,
             pointer: crate::pointer::Pointer::default(),
+            creating: None,
+            shutting_down: false,
+            help_scroll_limit: 0,
         })
     }
 
@@ -163,7 +178,11 @@ impl App {
             &mut self.remote
         }
     }
-    fn check_queue_available(&self) -> Result<()> {
+    fn check_idle(&self) -> Result<()> {
+        ensure!(
+            self.creating.is_none(),
+            "Wait for folder creation to finish"
+        );
         ensure!(
             self.local_job.is_none() && self.remote_job.is_none() && self.pending_review.is_none(),
             "Wait for the current directory or transfer review to finish preparing"
@@ -180,11 +199,93 @@ impl App {
             self.retained.len() < paths::QUEUE_LIMIT,
             "Retained-path report is full; close this view to export it"
         );
+        Ok(())
+    }
+    fn check_queue_available(&self) -> Result<()> {
+        self.check_idle()?;
         ensure!(
             self.local_ready && self.remote_ready,
             "Wait for both directories to open first"
         );
         Ok(())
+    }
+    fn check_folder_available(&self, local: bool) -> Result<()> {
+        self.check_idle()?;
+        ensure!(
+            if local {
+                self.local_ready
+            } else {
+                self.remote_ready
+            },
+            "Wait for this directory to open first"
+        );
+        Ok(())
+    }
+    fn create_folder(&mut self, request: crate::folders::Request) -> Result<()> {
+        self.check_folder_available(request.local)?;
+        let pane = if request.local {
+            &self.local
+        } else {
+            &self.remote
+        };
+        ensure!(
+            pane.path == request.parent,
+            "The parent directory changed. Open Create folder again."
+        );
+        let destination = request.destination()?;
+        let started = Arc::new(AtomicBool::new(false));
+        if request.local {
+            self.start_local(LocalAction::CreateFolder(request.clone(), started.clone()))?;
+        } else {
+            self.start_remote(RemoteAction::CreateFolder(request.clone(), started.clone()))?;
+        }
+        self.creating = Some(Creation { request, started });
+        self.note(format!("Creating folder: {}", paths::display(&destination)));
+        Ok(())
+    }
+    fn finish_folder(&mut self, result: Result<String>, unfinished: bool) {
+        let Some(creation) = self.creating.take() else {
+            return;
+        };
+        match result {
+            Ok(path) => {
+                self.note(format!("Created folder: {}", paths::display(&path)));
+                let pane = if creation.request.local {
+                    &self.local
+                } else {
+                    &self.remote
+                };
+                if !self.shutting_down && pane.path == creation.request.parent {
+                    let result = if creation.request.local {
+                        self.start_local(LocalAction::List(PathBuf::from(&creation.request.parent)))
+                    } else {
+                        self.start_remote(RemoteAction::List(creation.request.parent.clone()))
+                    };
+                    if let Err(error) = result {
+                        self.note(format!(
+                            "Folder created; refresh could not start: {error:#}"
+                        ));
+                    }
+                }
+            }
+            Err(error) => {
+                let path = creation
+                    .request
+                    .destination()
+                    .unwrap_or_else(|_| creation.request.parent.clone());
+                let status = if unfinished || creation.started.load(Ordering::Acquire) {
+                    let message = format!(
+                        "Folder creation could not be confirmed: {}. Refresh to check it before retrying. {error:#}",
+                        paths::display(&path)
+                    );
+                    self.retained.push(message.clone());
+                    message
+                } else {
+                    format!("Folder was not created: {error:#}")
+                };
+                self.note(status);
+            }
+        }
     }
     fn prepare(&mut self) -> Result<()> {
         self.check_queue_available()?;
@@ -240,6 +341,10 @@ impl App {
         Ok(())
     }
     fn remember_layout(&mut self, area: ratatui::layout::Rect) {
+        self.help_scroll_limit = crate::ui_render::help_scroll_limit(area);
+        if let Some(Modal::Help { scroll }) = &mut self.modal {
+            *scroll = (*scroll).min(self.help_scroll_limit);
+        }
         let geometry = crate::ui_render::mouse_geometry(area, &self.local, &self.remote);
         if let Some(geometry) = geometry {
             self.local.offset = geometry.panes[0].start;
@@ -364,7 +469,19 @@ impl App {
                 .active
                 .as_ref()
                 .is_some_and(|job| job.directory && job.direction == Direction::Download);
-            if directory {
+            if self
+                .creating
+                .as_ref()
+                .is_some_and(|creation| creation.request.local)
+            {
+                self.finish_folder(
+                    result.and_then(|value| match value {
+                        LocalValue::CreatedFolder(path) => Ok(path),
+                        _ => anyhow::bail!("Unexpected folder worker result"),
+                    }),
+                    false,
+                );
+            } else if directory {
                 self.finish_active(result.map(|_| ()), None);
             } else if generation == self.local_generation {
                 match result {
@@ -375,6 +492,9 @@ impl App {
                     }
                     Ok(LocalValue::Plan(jobs)) => self.pending_review = Some(jobs),
                     Ok(LocalValue::Directory) => {}
+                    Ok(LocalValue::CreatedFolder(_)) => {
+                        self.note("Unclaimed local folder result; refresh before retrying.")
+                    }
                     Err(error) => self.note(format!("Local: {error:#}")),
                 }
             }
@@ -395,13 +515,26 @@ impl App {
                 .active
                 .as_ref()
                 .is_some_and(|job| job.directory && job.direction == Direction::Upload);
-            if directory {
+            if self
+                .creating
+                .as_ref()
+                .is_some_and(|creation| !creation.request.local)
+            {
+                self.finish_folder(
+                    result.and_then(|value| match value {
+                        RemoteValue::CreatedFolder(path) => Ok(path),
+                        _ => anyhow::bail!("Unexpected folder worker result"),
+                    }),
+                    false,
+                );
+            } else if directory {
                 self.finish_active(result.map(|_| ()), None);
             } else if generation == self.remote_generation {
                 match result {
                     Ok(RemoteValue::Listing(listing)) => { self.remote.replace(listing); self.remote_ready = true; self.note("Choose files, then F5 to review a transfer."); },
                     Ok(RemoteValue::Plan(jobs)) => self.pending_review = Some(jobs),
                     Ok(RemoteValue::Directory) => {},
+                    Ok(RemoteValue::CreatedFolder(_))=>self.note("Unclaimed remote folder result; refresh before retrying."),
                     Err(error) => self.note(format!("SSH: {error:#}. Resolve connection/trust in a normal SSH session, then F8 to retry.")),
                 }
             }
@@ -512,6 +645,7 @@ impl App {
         // Restore editable text after validation fails. Do not clone large
         // transfer reviews or history for every navigation key.
         let restore = match &self.modal {
+            Some(Modal::CreateFolder(request)) => Some(Modal::CreateFolder(request.clone())),
             Some(Modal::Edit { kind, text }) => Some(Modal::Edit {
                 kind: *kind,
                 text: text.clone(),
@@ -543,7 +677,7 @@ impl App {
             if matches!(self.modal, Some(Modal::Quit)) {
                 return Ok(true);
             }
-            if self.active.is_some() || !self.queue.is_empty() {
+            if self.active.is_some() || !self.queue.is_empty() || self.creating.is_some() {
                 self.modal = Some(Modal::Quit);
                 return Ok(false);
             }
@@ -558,6 +692,32 @@ impl App {
         }
         if let Some(modal) = self.modal.take() {
             match modal {
+                Modal::CreateFolder(mut request) => {
+                    match key.code {
+                        KeyCode::Esc => return Ok(false),
+                        KeyCode::F(9) if key.kind == KeyEventKind::Press => {
+                            self.create_folder(request)?;
+                            return Ok(false);
+                        }
+                        KeyCode::Backspace => {
+                            request.name.pop();
+                        }
+                        KeyCode::Char('a') if control => request.name.clear(),
+                        KeyCode::Char(character)
+                            if !control
+                                && !key.modifiers.contains(KeyModifiers::ALT)
+                                && !character.is_control() =>
+                        {
+                            ensure!(
+                                request.name.len() + character.len_utf8() <= 1024,
+                                "Folder name is too long"
+                            );
+                            request.name.push(character);
+                        }
+                        _ => {}
+                    }
+                    self.modal = Some(Modal::CreateFolder(request));
+                }
                 Modal::Review {
                     mut jobs,
                     mut cursor,
@@ -681,9 +841,21 @@ impl App {
                         self.modal = Some(Modal::Quit);
                     }
                 }
-                Modal::Help => {
+                Modal::Help { mut scroll } => {
+                    match key.code {
+                        KeyCode::Up => scroll = scroll.saturating_sub(1),
+                        KeyCode::Down => {
+                            scroll = scroll.saturating_add(1).min(self.help_scroll_limit)
+                        }
+                        KeyCode::PageUp => scroll = scroll.saturating_sub(10),
+                        KeyCode::PageDown => {
+                            scroll = scroll.saturating_add(10).min(self.help_scroll_limit)
+                        }
+                        KeyCode::Home => scroll = 0,
+                        _ => {}
+                    }
                     if key.code != KeyCode::Esc && key.code != KeyCode::F(1) {
-                        self.modal = Some(Modal::Help);
+                        self.modal = Some(Modal::Help { scroll });
                     }
                 }
                 Modal::Details { body, mut scroll } => {
@@ -712,6 +884,36 @@ impl App {
             return Ok(false);
         }
         match key.code {
+            KeyCode::Insert if key.kind == KeyEventKind::Press => {
+                self.check_folder_available(self.pane == 0)?;
+                self.note("Choose a folder name, then press F9 to create it.");
+                self.modal = Some(Modal::CreateFolder(crate::folders::Request {
+                    local: self.pane == 0,
+                    parent: self.current().path.clone(),
+                    name: String::new(),
+                }));
+            }
+            KeyCode::Char('a' | 'A') if control => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.current_mut().marked.clear();
+                    self.note("Selection cleared.");
+                } else {
+                    self.current_mut().select_all()?;
+                    self.note(format!(
+                        "Selected {} supported entries in this filtered list.",
+                        self.current().marked.len()
+                    ));
+                }
+            }
+            KeyCode::Char('o') if control => {
+                if key.kind == KeyEventKind::Press {
+                    self.current_mut().cycle_sort();
+                    self.note(format!(
+                        "Sort: {} (folders first). Ctrl+O changes sort.",
+                        self.current().sort.label()
+                    ));
+                }
+            }
             KeyCode::Tab => self.pane = 1 - self.pane,
             KeyCode::Char('.')
                 if !control
@@ -752,7 +954,7 @@ impl App {
             KeyCode::Char(' ') if self.current().filter.is_empty() => {
                 self.current_mut().toggle()?
             }
-            KeyCode::F(1) => self.modal = Some(Modal::Help),
+            KeyCode::F(1) => self.modal = Some(Modal::Help { scroll: 0 }),
             KeyCode::F(2) if self.failed.is_some() => {
                 let mut jobs = vec![self.failed.take().unwrap()];
                 jobs.extend(self.queue.drain(..));
@@ -839,6 +1041,14 @@ impl App {
         self.pointer.clear();
         ensure!(value.len() <= 64 * 1024, "Paste is too large");
         match &mut self.modal {
+            Some(Modal::CreateFolder(request)) => {
+                ensure!(
+                    request.name.len() + value.len() <= 1024
+                        && !value.chars().any(char::is_control),
+                    "Paste one folder name, without newlines or control characters"
+                );
+                request.name.push_str(&value);
+            }
             Some(Modal::Edit { kind, text }) => {
                 let limit = if matches!(kind, EditKind::Paste) {
                     64 * 1024
@@ -864,6 +1074,7 @@ impl App {
     }
 
     async fn shutdown(&mut self) {
+        self.shutting_down = true;
         self.queue.clear();
         self.failed = None;
         self.registry.close_all(); // Independent of any blocked async worker.
@@ -897,6 +1108,14 @@ impl App {
                     "Directory worker has not completed; folder creation may have occurred"
                 )),
                 None,
+            );
+        }
+        if self.creating.is_some() {
+            self.finish_folder(
+                Err(anyhow::anyhow!(
+                    "Folder worker has not completed before shutdown"
+                )),
+                true,
             );
         }
         if let Some(job) = &self.remote_job {
@@ -1191,6 +1410,102 @@ mod tests {
         app.key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE))
             .unwrap();
         assert_eq!(app.queue.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn folder_form_keeps_paste_literal_and_needs_explicit_create_key() {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().canonicalize().unwrap();
+        let mut app = app();
+        app.local
+            .replace(crate::browser::list_local(&parent, &AtomicBool::new(false)).unwrap());
+        app.local_ready = true;
+        // An unavailable other pane does not block creating a local folder.
+        assert!(!app.remote_ready);
+        app.key(KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE))
+            .unwrap();
+        app.paste("new folder".into()).unwrap();
+        assert!(app.paste("\nF9".into()).is_err());
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(!parent.join("new folder").exists());
+        assert!(app.local_job.is_none() && app.creating.is_none());
+        let mut repeated = KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE);
+        repeated.kind = KeyEventKind::Repeat;
+        app.key(repeated).unwrap();
+        assert!(app.local_job.is_none());
+        app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(
+            matches!(&app.modal, Some(Modal::CreateFolder(request)) if request.name.is_empty())
+        );
+        app.paste("../invalid".into()).unwrap();
+        assert!(
+            app.key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE))
+                .is_err()
+        );
+        assert!(
+            matches!(&app.modal, Some(Modal::CreateFolder(request)) if request.name == "../invalid")
+        );
+        app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL))
+            .unwrap();
+        app.paste("new folder".into()).unwrap();
+        app.key(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.creating.is_some() && app.queue.is_empty() && app.active.is_none());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.local_job.is_some() && Instant::now() < deadline {
+            app.collect().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(app.local_job.is_none());
+        assert!(parent.join("new folder").is_dir());
+        assert!(
+            app.local
+                .entries
+                .iter()
+                .any(|entry| entry.name == "new folder")
+        );
+        assert!(app.retained.is_empty() && app.active.is_none() && app.queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_retains_uncertain_create_path_without_waiting_for_blocked_worker() {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().canonicalize().unwrap();
+        let (send, receive) = std::sync::mpsc::channel();
+        let mut app = app();
+        let request = crate::folders::Request {
+            local: true,
+            parent: parent.to_str().unwrap().into(),
+            name: "pending".into(),
+        };
+        let destination = request.destination().unwrap();
+        app.creating = Some(Creation {
+            request,
+            // The worker has not signalled its mutation yet, but is still
+            // running. Shutdown cannot prove that it will not create a path.
+            started: Arc::new(AtomicBool::new(false)),
+        });
+        app.local_job = Some(LocalJob {
+            generation: 1,
+            started: Instant::now(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            task: tokio::task::spawn_blocking(move || {
+                receive.recv().unwrap();
+                Ok(LocalValue::CreatedFolder(destination))
+            }),
+        });
+        app.shutdown().await;
+        assert!(
+            app.retained
+                .iter()
+                .any(|line| line.contains("could not be confirmed") && line.contains("pending"))
+        );
+        assert!(app.creating.is_none());
+        assert!(!app.local_job.as_ref().unwrap().task.is_finished());
+        send.send(()).unwrap();
+        app.local_job.take().unwrap().task.await.unwrap().unwrap();
     }
     #[test]
     fn paste_byte_limit_and_quit_repeat_keep_the_existing_ui_state() {

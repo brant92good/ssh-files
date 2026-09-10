@@ -58,6 +58,24 @@ A bounded queue contains at most 1,000 items; only one transfer runs. Esc cancel
 the current operation/queue. Pasted paths are data and reviewed before upload;
 they are not native drag-out support or shell commands.
 
+Standalone folder creation has a separate frozen request and worker result;
+it cannot complete or start a transfer queue item. Insert opens the form and
+F9 confirms a validated single portable child. The worker checks parent and
+destination, then uses create-new mkdir. No existing entry is accepted as a
+successful creation. Cancellation after mutation begins retains the destination
+as uncertain. Shutdown also retains an unfinished worker's destination even
+when its mutation flag is still false: lack of that flag does not prove a
+running worker cannot write later. Only an observed pre-write failure can say
+the folder was not created. The existing local worker slot remains occupied
+until the actual blocking closure completes.
+
+Ctrl+A builds the entire supported filtered selection before applying its cap.
+Sorting keeps folders first and restores the selected name while retaining
+marks. Both change the pane revision, ending stale pointer gestures. Rendered
+filter footers and pointer geometry share the same variable row count. Help
+lines fit the smallest supported popup, and its scroll limit follows the
+actual popup height.
+
 Use bounded request/result channels or one retained job handle per worker, and
 a latest-value watch for progress. Cancel/quit use a separate watch/atomic path;
 the event loop never waits to enqueue an ordinary request. Results carry an
