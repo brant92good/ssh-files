@@ -15,6 +15,7 @@ const F6: &str = "\x1b[17~";
 const F8: &str = "\x1b[19~";
 const F9: &str = "\x1b[20~";
 const F10: &str = "\x1b[21~";
+
 #[path = "support/gate.rs"]
 mod gate;
 
@@ -77,6 +78,47 @@ impl Session {
     fn send(&mut self, text: &str) {
         self.input.write_all(text.as_bytes()).unwrap();
         self.input.flush().unwrap();
+    }
+    fn position(&mut self, text: &str) -> (u16, u16) {
+        self.expect(text);
+        let (rows, cols) = self.parser.screen().size();
+        for row in 0..rows {
+            let line: String = (0..cols)
+                .map(|column| {
+                    let contents = self.parser.screen().cell(row, column).unwrap().contents();
+                    if contents.is_empty() { " " } else { contents }
+                })
+                .collect();
+            if let Some(index) = line.find(text) {
+                return (line[..index].chars().count() as u16, row);
+            }
+        }
+        panic!("No visible {text:?}: {}", self.parser.screen().contents());
+    }
+    fn mouse(&mut self, button: u16, position: (u16, u16), release: bool) {
+        self.send(&format!(
+            "\x1b[<{};{};{}{}",
+            button,
+            position.0 + 1,
+            position.1 + 1,
+            if release { 'm' } else { 'M' }
+        ));
+    }
+    fn click(&mut self, button: u16, position: (u16, u16)) {
+        self.mouse(button, position, false);
+        self.mouse(button, position, true);
+    }
+    fn resize(&mut self, rows: u16, cols: u16) {
+        self._pair
+            .master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        self.parser.screen_mut().set_size(rows, cols);
     }
     fn pump(&mut self, timeout: Duration) {
         if let Ok(bytes) = self.output.recv_timeout(timeout) {
@@ -189,6 +231,205 @@ fn owned_terminal_printable_input_and_failed_connection_remain_safe() {
     assert!(session.child.try_wait().unwrap().is_none());
     assert!(session.parser.screen().contents().contains("0 complete"));
     session.exit();
+}
+
+#[test]
+fn owned_terminal_hidden_toggle_and_literal_filter_editor() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config");
+    std::fs::write(&config, "Host fixture\n HostName 127.0.0.1\n Port 1\n IdentityAgent none\n UserKnownHostsFile none\n").unwrap();
+    let local = root.path().join("files");
+    std::fs::create_dir(&local).unwrap();
+    std::fs::write(local.join(".hidden-data"), "private fixture").unwrap();
+    std::fs::write(local.join("visible-data"), "visible fixture").unwrap();
+    let local = local.canonicalize().unwrap();
+    let mut session = Session::start(&config, &local, ".");
+    session.expect("visible-data");
+    assert!(!session.parser.screen().contents().contains(".hidden-data"));
+    session.send(".");
+    session.expect(".hidden-data");
+    session.expect("hidden on");
+    session.send(".");
+    session.expect("hidden off");
+    assert!(!session.parser.screen().contents().contains(".hidden-data"));
+    session.send(F3);
+    session.expect("Filter files");
+    session.send(".hidden-data");
+    session.settle();
+    assert!(session.parser.screen().contents().contains(".hidden-data"));
+    assert!(session.parser.screen().contents().contains("Filter files"));
+    session.send("\x1b");
+    session.expect("visible-data");
+    assert!(!session.parser.screen().contents().contains(".hidden-data"));
+    session.exit();
+}
+
+#[test]
+fn owned_terminal_sgr_mouse_selects_ranges_scrolls_hovered_pane_and_opens_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config");
+    std::fs::write(&config, "Host fixture\n HostName 127.0.0.1\n Port 1\n IdentityAgent none\n UserKnownHostsFile none\n").unwrap();
+    let local = root.path().join("files");
+    let folder = local.join("a-folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("entered-folder-marker"), b"owned fixture").unwrap();
+    for index in 0..40 {
+        std::fs::write(local.join(format!("item-{index:02}")), b"owned").unwrap();
+    }
+    let local = local.canonicalize().unwrap();
+    let mut session = Session::start(&config, &local, ".");
+    session.expect("item-10");
+    let two = session.position("item-02");
+    let five = session.position("item-05");
+    session.click(0, two);
+    session.click(4, five); // Shift extends the exact clicked anchor.
+    session.expect("4 marked");
+    let three = session.position("item-03");
+    session.click(16, three); // Ctrl toggles only one row.
+    session.expect("3 marked");
+    let one = session.position("item-01");
+    let four = session.position("item-04");
+    session.mouse(0, one, false);
+    session.mouse(32, four, false);
+    session.expect("4 marked");
+    session.mouse(32, (100, four.1), false); // No range crosses to Remote.
+    session.mouse(0, (100, four.1), true);
+    session.settle();
+    assert!(session.parser.screen().contents().contains("4 marked"));
+    session.mouse(0, one, false);
+    session.mouse(32, five, false);
+    // A changed count proves this new drag was consumed before resizing.
+    session.expect("5 marked");
+    session.resize(12, 40);
+    session.expect("at least 60");
+    session.mouse(32, (5, 10), false); // A resize ends the old range gesture.
+    session.resize(32, 130);
+    session.expect("5 marked");
+    let eight = session.position("item-08");
+    session.mouse(32, eight, false);
+    session.mouse(0, four, true);
+    session.settle();
+    assert!(session.parser.screen().contents().contains("5 marked"));
+    let local_before = session.parser.screen().contents();
+    session.mouse(65, (100, four.1), false); // Hovered empty Remote, Local stays put.
+    session.settle();
+    assert_eq!(session.parser.screen().contents(), local_before);
+    session.mouse(65, four, false);
+    session.expect("item-18");
+    assert!(!session.parser.screen().contents().contains("a-folder"));
+    // Mouse on a directory editor must not navigate or accept the dialog.
+    session.send(F2);
+    session.expect("Local directory");
+    session.click(0, four);
+    session.settle();
+    assert!(
+        session
+            .parser
+            .screen()
+            .contents()
+            .contains("Local directory")
+    );
+    session.send("\x1b");
+    session.expect("item-07");
+    for _ in 0..3 {
+        session.mouse(64, four, false);
+    }
+    session.expect("a-folder");
+    let directory = session.position("a-folder");
+    session.click(0, directory);
+    session.click(0, directory);
+    session.expect("entered-folder-marker");
+    session.exit();
+}
+
+#[test]
+#[ignore = "Requires explicit disposable SFTP fixture environment; never uses user SSH files"]
+fn actual_sftp_mouse_hover_and_remote_folder_navigation_with_hidden_entries() {
+    let config = std::env::var_os("SSH_FILES_TEST_CONFIG").expect("SSH_FILES_TEST_CONFIG");
+    let server = std::path::PathBuf::from(
+        std::env::var_os("SSH_FILES_TEST_REMOTE").expect("SSH_FILES_TEST_REMOTE"),
+    );
+    let target = tempfile::Builder::new()
+        .prefix("mouse-owned-")
+        .tempdir_in(&server)
+        .unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let local_path = local.path().canonicalize().unwrap();
+    std::fs::create_dir(target.path().join("a-remote-folder")).unwrap();
+    std::fs::write(
+        target.path().join("a-remote-folder/remote-entered-marker"),
+        b"remote fixture",
+    )
+    .unwrap();
+    std::fs::write(
+        target.path().join("a-remote-folder/.remote-hidden"),
+        b"hidden remote fixture",
+    )
+    .unwrap();
+    std::fs::write(local_path.join(".local-hidden"), b"hidden local fixture").unwrap();
+    for index in 0..40 {
+        std::fs::write(local_path.join(format!("local-{index:02}")), b"local").unwrap();
+        std::fs::write(target.path().join(format!("remote-{index:02}")), b"remote").unwrap();
+    }
+    let remote = target.path().to_str().unwrap().replace('\\', "/");
+    let mut session = Session::start(Path::new(&config), &local_path, &remote);
+    session.expect("local-10");
+    session.expect("remote-10");
+    let remote_row = session.position("remote-04");
+    session.mouse(65, remote_row, false);
+    session.expect("remote-18");
+    assert!(session.parser.screen().contents().contains("local-00"));
+    assert!(
+        !session
+            .parser
+            .screen()
+            .contents()
+            .contains("a-remote-folder")
+    );
+    session.send(F2); // Hovering Remote has not changed Local keyboard focus.
+    session.expect("Local directory");
+    session.send("\x1b");
+    session.expect("remote-18");
+    session.mouse(64, remote_row, false);
+    session.expect("a-remote-folder");
+    let two = session.position("remote-02");
+    let five = session.position("remote-05");
+    session.click(0, two);
+    session.click(4, five);
+    session.expect("4 marked");
+    let three = session.position("remote-03");
+    session.click(16, three);
+    session.expect("3 marked");
+    let folder = session.position("a-remote-folder");
+    session.click(0, folder);
+    session.click(0, folder);
+    session.expect("remote-entered-marker");
+    assert!(
+        !session
+            .parser
+            .screen()
+            .contents()
+            .contains(".remote-hidden")
+    );
+    assert!(!session.parser.screen().contents().contains(".local-hidden"));
+    session.send(".");
+    session.expect(".remote-hidden");
+    session.expect(".local-hidden");
+    session.send(".");
+    session.expect("hidden off");
+    assert!(
+        !session
+            .parser
+            .screen()
+            .contents()
+            .contains(".remote-hidden")
+    );
+    assert!(!session.parser.screen().contents().contains(".local-hidden"));
+    session.exit();
+    assert_eq!(
+        std::fs::read(target.path().join("a-remote-folder/remote-entered-marker")).unwrap(),
+        b"remote fixture"
+    );
 }
 
 #[test]

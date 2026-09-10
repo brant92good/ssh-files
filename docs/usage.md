@@ -40,6 +40,21 @@ the filter. Space marks an entry; when nothing is marked, F5 uses the highlighte
 entry. An exclamation mark identifies an unsupported name or file type; F4
 explains it.
 
+Dotfiles are hidden by default; local Windows hidden attributes are respected
+too. Press `.` with an empty filter to show or hide them in both panes. Use F3
+when you want to type a filter beginning with a period. Hiding an entry removes
+its mark. Selecting a folder still includes its hidden contents when scanning
+that folder for transfer.
+
+The mouse wheel scrolls the pane under the pointer. Click selects an entry;
+double-click opens a folder. Ctrl-click toggles one mark, while Shift-click or
+dragging selects a range. A range stays within one pane and cannot exceed 1,000
+entries. Rejected entries are skipped. To extend a drag beyond the visible list,
+use the wheel while holding the button; moving beyond the edge alone does not
+scroll. Keyboard input, filtering, refresh, dialogs and resizing end the current
+gesture. Mouse actions inside dialogs are ignored. These controls select entries
+inside Files; they do not drag files to or from another application.
+
 F8 refreshes the active pane and reconnects its browser if needed. The browser
 and transfer queue are independent; a browser refresh does not restart or stop
 the transfer.

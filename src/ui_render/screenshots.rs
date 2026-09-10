@@ -66,6 +66,7 @@ fn entry(name: &str, kind: Kind, size: u64) -> Entry {
         name: name.into(),
         kind,
         size,
+        hidden: name.starts_with('.'),
         rejected: None,
     }
 }

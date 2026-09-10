@@ -23,6 +23,7 @@ pub struct Entry {
     pub name: String,
     pub kind: Kind,
     pub size: u64,
+    pub hidden: bool,
     pub rejected: Option<String>,
 }
 
@@ -83,10 +84,12 @@ pub fn list_local(path: &Path, cancel: &AtomicBool) -> Result<Listing> {
         if kind == Kind::Other {
             rejected = Some("Links, reparse points and special files are not followed".into());
         }
+        let hidden = name.to_string_lossy().starts_with('.') || local_hidden(&metadata);
         entries.push(Entry {
             name: name.to_string_lossy().chars().take(1024).collect(),
             kind,
             size: metadata.len(),
+            hidden,
             rejected,
         });
     }
@@ -96,6 +99,19 @@ pub fn list_local(path: &Path, cancel: &AtomicBool) -> Result<Listing> {
         path: path.to_string_lossy().into_owned(),
         entries,
     })
+}
+
+fn local_hidden(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x2 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 pub struct Browser {
@@ -248,6 +264,7 @@ fn append_page(
             rejected = Some("Links and special files are not followed".into());
         }
         entries.push(Entry {
+            hidden: file.filename.starts_with('.'),
             name: file.filename.chars().take(1024).collect(),
             kind,
             size: file.attrs.size.unwrap_or(0),
@@ -260,6 +277,49 @@ fn append_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn listing_retains_dotfiles_for_recursive_plans_but_labels_them_hidden() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join(".env"), "fixture").unwrap();
+        std::fs::write(directory.path().join("visible.txt"), "fixture").unwrap();
+        let listing = list_local(
+            &directory.path().canonicalize().unwrap(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(listing.entries.len(), 2);
+        assert!(
+            listing
+                .entries
+                .iter()
+                .find(|entry| entry.name == ".env")
+                .unwrap()
+                .hidden
+        );
+        assert!(
+            !listing
+                .entries
+                .iter()
+                .find(|entry| entry.name == "visible.txt")
+                .unwrap()
+                .hidden
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_hidden_attribute_is_read_inside_listing() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .attributes(0x2)
+            .open(directory.path().join("system.txt"))
+            .unwrap();
+        let listing = list_local(directory.path(), &AtomicBool::new(false)).unwrap();
+        assert_eq!(listing.entries.len(), 1);
+        assert!(listing.entries[0].hidden);
+    }
     #[test]
     fn page_limit_applies_before_accumulation_and_counts_rejected_entries() {
         let mut entries = Vec::new();

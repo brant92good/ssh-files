@@ -61,6 +61,7 @@ pub(crate) struct App {
     history: VecDeque<String>,
     retained: Vec<String>,
     pending_review: Option<Vec<Job>>,
+    pointer: crate::pointer::Pointer,
 }
 
 impl App {
@@ -101,6 +102,7 @@ impl App {
             history: VecDeque::new(),
             retained: Vec::new(),
             pending_review: None,
+            pointer: crate::pointer::Pointer::default(),
         })
     }
 
@@ -206,6 +208,7 @@ impl App {
         Ok(())
     }
     fn navigate(&mut self, path: String) -> Result<()> {
+        self.pointer.clear();
         if self.pane == 0 {
             self.start_local(LocalAction::List(PathBuf::from(path)))?;
         } else {
@@ -213,6 +216,53 @@ impl App {
         }
         self.note("Opening directory…");
         Ok(())
+    }
+    fn open_current(&mut self) -> Result<()> {
+        if let Some(entry) = self.current().current() {
+            ensure!(
+                entry.rejected.is_none(),
+                "{}",
+                entry.rejected.as_deref().unwrap_or("Unsupported entry")
+            );
+            if entry.kind == crate::browser::Kind::Directory {
+                let path = if self.pane == 0 {
+                    PathBuf::from(&self.local.path)
+                        .join(&entry.name)
+                        .to_str()
+                        .context("Local directory path is not UTF-8")?
+                        .to_owned()
+                } else {
+                    paths::remote_join(&self.remote.path, &entry.name)?
+                };
+                self.navigate(path)?;
+            }
+        }
+        Ok(())
+    }
+    fn remember_layout(&mut self, area: ratatui::layout::Rect) {
+        let geometry = crate::ui_render::mouse_geometry(area, &self.local, &self.remote);
+        if let Some(geometry) = geometry {
+            self.local.offset = geometry.panes[0].start;
+            self.remote.offset = geometry.panes[1].start;
+        }
+        self.pointer
+            .sync(geometry, [&self.local, &self.remote], self.modal.is_some());
+    }
+    fn mouse(&mut self, event: event::MouseEvent) -> Result<bool> {
+        if self.modal.is_some() {
+            self.pointer.clear();
+            return Ok(false);
+        }
+        if let Some(pane) = self.pointer.event(
+            event,
+            [&mut self.local, &mut self.remote],
+            &mut self.pane,
+            Instant::now(),
+        )? {
+            self.pane = pane;
+            self.open_current()?;
+        }
+        Ok(false)
     }
     fn cancel(&mut self) {
         self.queue.clear();
@@ -458,6 +508,7 @@ impl App {
     }
 
     fn key(&mut self, key: KeyEvent) -> Result<bool> {
+        self.pointer.clear();
         // Restore editable text after validation fails. Do not clone large
         // transfer reviews or history for every navigation key.
         let restore = match &self.modal {
@@ -662,30 +713,27 @@ impl App {
         }
         match key.code {
             KeyCode::Tab => self.pane = 1 - self.pane,
+            KeyCode::Char('.')
+                if !control
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                    && self.current().filter.is_empty() =>
+            {
+                if key.kind == KeyEventKind::Press {
+                    let show = !self.local.show_hidden;
+                    self.local.set_show_hidden(show);
+                    self.remote.set_show_hidden(show);
+                    self.note(if show {
+                        "Hidden files shown (. to hide)"
+                    } else {
+                        "Hidden files hidden (. to show)"
+                    });
+                }
+            }
             KeyCode::Up => self.current_mut().move_by(-1),
             KeyCode::Down => self.current_mut().move_by(1),
             KeyCode::PageUp => self.current_mut().move_by(-10),
             KeyCode::PageDown => self.current_mut().move_by(10),
-            KeyCode::Enter => {
-                if let Some(entry) = self.current().current() {
-                    ensure!(
-                        entry.rejected.is_none(),
-                        "{}",
-                        entry.rejected.as_deref().unwrap_or("Unsupported entry")
-                    );
-                    if entry.kind == crate::browser::Kind::Directory {
-                        let path = if self.pane == 0 {
-                            PathBuf::from(&self.local.path)
-                                .join(&entry.name)
-                                .to_string_lossy()
-                                .into_owned()
-                        } else {
-                            paths::remote_join(&self.remote.path, &entry.name)?
-                        };
-                        self.navigate(path)?;
-                    }
-                }
-            }
+            KeyCode::Enter => self.open_current()?,
             KeyCode::Backspace if !self.current().filter.is_empty() => {
                 self.current_mut().filter.pop();
                 self.current_mut().refilter();
@@ -788,6 +836,7 @@ impl App {
     }
 
     fn paste(&mut self, value: String) -> Result<()> {
+        self.pointer.clear();
         ensure!(value.len() <= 64 * 1024, "Paste is too large");
         match &mut self.modal {
             Some(Modal::Edit { kind, text }) => {
@@ -956,6 +1005,9 @@ fn terminal_closed(error: &anyhow::Error) -> bool {
 struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        // Mouse capture saves the already-raw Windows input mode; restore it
+        // before raw mode restores the original shell mode.
+        let _ = execute!(io::stdout(), event::DisableMouseCapture);
         let _ = terminal::disable_raw_mode();
         let _ = execute!(
             io::stdout(),
@@ -981,6 +1033,7 @@ pub async fn run(options: Options) -> Result<()> {
         io::stdout(),
         terminal::EnterAlternateScreen,
         event::EnableBracketedPaste,
+        event::EnableMouseCapture,
         cursor::Hide
     )?;
     let mut terminal = TerminalView::new()?;
@@ -990,7 +1043,10 @@ pub async fn run(options: Options) -> Result<()> {
     let loop_result: Result<()> = async {
     loop {
         app.collect().await;
-        terminal.inner.draw(|frame| crate::ui_render::draw(frame, &app))?;
+        terminal.inner.draw(|frame| {
+            app.remember_layout(frame.area());
+            crate::ui_render::draw(frame, &app);
+        })?;
         let mut quit = false;
         for _ in 0..32 {
             // The Unix use-dev-tty source checks its deadline before reading:
@@ -1004,9 +1060,13 @@ pub async fn run(options: Options) -> Result<()> {
             if !event::poll(poll)? {
                 break;
             }
-            let result = match event::read()? {
+            let input = event::read()?;
+            let redraw = matches!(input, Event::Mouse(_) | Event::Resize(_, _));
+            let result = match input {
                 Event::Key(key) => app.key(key),
                 Event::Paste(value) => app.paste(value).map(|_| false),
+                Event::Mouse(event) => app.mouse(event),
+                Event::Resize(_, _) => { app.pointer.clear(); Ok(false) },
                 _ => Ok(false),
             };
             match result {
@@ -1017,6 +1077,7 @@ pub async fn run(options: Options) -> Result<()> {
                 Ok(false) => {}
                 Err(error) => app.note(format!("{error:#}")),
             }
+            if redraw { break; }
         }
         if quit {
             break;

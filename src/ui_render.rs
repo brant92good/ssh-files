@@ -39,19 +39,54 @@ fn border(title: impl Into<String>, active: bool) -> Block<'static> {
         .title(format!(" {} ", title.into()))
         .border_style(Style::default().fg(if active { BLUE } else { DIM }))
 }
+fn pane_parts(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(border("", false).inner(area))
+}
+fn layout(area: Rect) -> Option<std::rc::Rc<[Rect]>> {
+    (area.width >= 60 && area.height >= 16).then(|| {
+        Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(5),
+            Constraint::Length(4),
+            Constraint::Length(2),
+            Constraint::Length(2),
+        ])
+        .split(area)
+    })
+}
+pub(crate) fn mouse_geometry(
+    area: Rect,
+    local: &Pane,
+    remote: &Pane,
+) -> Option<crate::pointer::Geometry> {
+    let parts = layout(area)?;
+    let panes = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(parts[1]);
+    Some(crate::pointer::Geometry {
+        area,
+        panes: std::array::from_fn(|index| {
+            let pane = [local, remote][index];
+            let list = pane_parts(panes[index])[1];
+            crate::pointer::PaneGeometry {
+                list,
+                start: pane.view_start(usize::from(list.height)),
+            }
+        }),
+        revisions: [local.revision, remote.revision],
+    })
+}
 fn pane(frame: &mut Frame, area: Rect, pane: &Pane, title: &str, active: bool, busy: bool) {
     let block = border(
         format!("{title}{}", if busy { " · loading" } else { "" }),
         active,
     );
-    let inner = block.inner(area);
     frame.render_widget(block, area);
-    let parts = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
+    let parts = pane_parts(area);
     frame.render_widget(
         Paragraph::new(paths::display(&pane.path))
             .style(Style::default().fg(BLUE))
@@ -59,7 +94,7 @@ fn pane(frame: &mut Frame, area: Rect, pane: &Pane, title: &str, active: bool, b
         parts[0],
     );
     let height = usize::from(parts[1].height);
-    let start = pane.cursor.saturating_sub(height.saturating_sub(1));
+    let start = pane.view_start(height);
     let items: Vec<_> = pane
         .visible
         .iter()
@@ -110,9 +145,10 @@ fn pane(frame: &mut Frame, area: Rect, pane: &Pane, title: &str, active: bool, b
     frame.render_widget(List::new(items), parts[1]);
     frame.render_widget(
         Paragraph::new(format!(
-            "{} shown · {} marked{}",
+            "{} shown · {} marked · hidden {}{}",
             pane.visible.len(),
             pane.marked.len(),
+            if pane.show_hidden { "on" } else { "off" },
             if pane.filter.is_empty() {
                 String::new()
             } else {
@@ -130,18 +166,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         Block::default().style(Style::default().fg(INK).bg(BACK)),
         area,
     );
-    if area.width < 60 || area.height < 16 {
+    let Some(parts) = layout(area) else {
         frame.render_widget(Paragraph::new("SSH Files\nMake this terminal at least 60 columns × 16 rows.\nF10 closes; Esc cancels active work.").wrap(Wrap { trim: false }), area);
         return;
-    }
-    let parts = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(5),
-        Constraint::Length(4),
-        Constraint::Length(2),
-        Constraint::Length(2),
-    ])
-    .split(area);
+    };
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -238,7 +266,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             .wrap(Wrap { trim: false }),
         parts[3],
     );
-    frame.render_widget(Paragraph::new(" Tab switch   Enter open   Space mark   F5 review   Esc stop\n F2 path   F3 filter   F4 details   F6 paste paths   F1 help   F10 quit").style(Style::default().fg(DIM)), parts[4]);
+    frame.render_widget(Paragraph::new(" Tab switch   Enter open   Space mark   F5 review   . hidden   Esc stop\n F2 path   F3 filter   F4 details   F6 paste paths   F1 help   F10 quit").style(Style::default().fg(DIM)), parts[4]);
     if let Some(modal) = &app.modal {
         draw_modal(frame, modal);
     }
@@ -356,7 +384,7 @@ fn draw_modal(frame: &mut Frame, modal: &Modal) {
         }
         Modal::Help => {
             let area = popup(frame, "Keyboard");
-            frame.render_widget(Paragraph::new("Tab                 Switch local / remote pane\nArrows, Enter       Select / open a folder\nBackspace           Remove filter text, otherwise go up\nType                Filter the current pane\nSpace               Mark or unmark an entry\nF2                  Enter a directory path\nF3                  Edit / clear the filter\nF4                  Connection details and retained paths\nF5                  Review selected uploads / downloads\nF6                  Paste local paths for upload\nF7                  Request copy path (terminal clipboard)\nF8                  Refresh / reconnect browser\nF9 or Ctrl+S        Start only from transfer review\nEsc or Ctrl+C       Cancel active work and queued items\nF10 or Ctrl+Q       Close Files (confirm active transfers)\n\nFolders are scanned before review. Unsupported links or names\nare shown with !. Existing final files are never replaced.\n\nFiles uses one browser SSH session and a second serial-transfer\nsession on the same explicit route. Navigation is independent\nof the transfer. Resolve login / trust in a normal SSH session.\n\nEsc closes this help.").wrap(Wrap { trim: false }), area);
+            frame.render_widget(Paragraph::new("Tab                 Switch local / remote pane\nArrows, Enter       Select / open a folder\nBackspace           Remove filter text, otherwise go up\nType                Filter the current pane\n.                   Show/hide hidden files (empty filter)\nSpace               Mark or unmark an entry\nMouse wheel         Scroll the pane under the pointer\nClick / double-click  Select / open a folder\nCtrl-click, Shift-click, drag   Toggle / select a range\nF2                  Enter a directory path\nF3                  Edit / clear the filter\nF4                  Connection details and retained paths\nF5                  Review selected uploads / downloads\nF6                  Paste local paths for upload\nF7                  Request copy path (terminal clipboard)\nF8                  Refresh / reconnect browser\nF9 or Ctrl+S        Start only from transfer review\nEsc or Ctrl+C       Cancel active work and queued items\nF10 or Ctrl+Q       Close Files (confirm active transfers)\n\n! marks unsupported entries. F5 reviews before F9 transfers.\nExisting final files are kept. Esc closes this help.").wrap(Wrap { trim: false }), area);
         }
         Modal::Quit => {
             let area = popup(frame, "Close Files?");

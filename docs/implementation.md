@@ -35,6 +35,25 @@ with F5 building the review. This matters because crossterm on Windows does not
 provide an atomic Event::Paste. Main printable keys must not execute mutations
 or quit. F1 opens help and F10/Ctrl+Q closes after confirming active transfers.
 Show file names, types, sizes, completed/remaining items and active byte progress.
+Hidden entries are off by default in both panes. With an empty filter, `.` toggles
+them; inside a filter/editor the period remains literal text. F3 edits a filter
+that starts with a period. Local listings flag dotnames and Windows hidden
+attributes in the existing worker; SFTP listings flag dotnames. Filtering changes
+only the view: a selected folder's recursive transfer still includes its hidden
+contents. Filtering removes now-invisible marks, and reloads preserve hidden
+visibility preference. The footer shows hidden on/off.
+
+Pointer hit tests use the renderer's exact file-list rectangles and stored
+viewport offsets, excluding headers, path lines, footers and dialogs. Anchors
+identify a pane, directory, full entry name and listing/filter revision. Mouse
+events request a redraw before another mouse event is read. A new mapping,
+keyboard event, resize or dialog invalidates gestures; wheel scrolling may keep
+an active drag within its original pane. Double-click opens only the same safe
+directory within 400 ms. Ctrl toggles a mark; Shift and drag build a complete
+candidate set before enforcing the 1,000-entry limit, then replace the marks
+atomically. Rejected entries are excluded. Mouse capture is restored before raw
+mode on Windows, reversing capture's saved-console-mode order.
+
 A bounded queue contains at most 1,000 items; only one transfer runs. Esc cancels
 the current operation/queue. Pasted paths are data and reviewed before upload;
 they are not native drag-out support or shell commands.

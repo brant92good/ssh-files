@@ -7,6 +7,18 @@ Windows, both Linux architectures, and both macOS architectures.
 [The tagged release run](https://github.com/brant92good/ssh-files/actions/runs/34450038417)
 passed all eleven jobs at commit `e8cde5f`.
 
+## Unreleased browser changes
+
+The development branch adds hidden-file filtering and mouse selection. Its
+Windows suite passes 38 active tests, including a real ConPTY mouse sequence
+for range selection, pane-specific scrolling, resizing, dialog isolation and
+folder navigation. Three actual loopback SFTP UI tests also pass, including
+remote mouse navigation, hidden entries, transfer integrity and interruption
+cleanup. The 1,000-entry range limit and stale-anchor checks have model tests.
+This is development evidence, separate from the published 0.1.0 binary above.
+Linux/macOS execution of these new controls and direct desktop mouse behavior
+remain unqualified. OS file drag-in and drag-out are not implemented.
+
 ## What was exercised
 
 | Platform | Observed checks |

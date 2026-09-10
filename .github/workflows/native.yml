@@ -91,7 +91,7 @@ jobs:
       - name: Publish immutable prerelease assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --prerelease --title "SSH Files $GITHUB_REF_NAME beta" --notes-file docs/releases/0.1.0.md
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --prerelease --title "SSH Files $GITHUB_REF_NAME beta" --notes-file "docs/releases/${GITHUB_REF_NAME#v}.md"
   released-install:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: prerelease

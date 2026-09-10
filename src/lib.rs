@@ -3,6 +3,7 @@ mod connection;
 pub mod framing;
 pub mod paths;
 pub mod plan;
+mod pointer;
 mod process;
 pub use process::Registry as ProcessRegistry;
 mod clipboard;

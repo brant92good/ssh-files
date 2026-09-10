@@ -1,11 +1,11 @@
 <p align="center"><img src="docs/assets/icon.svg" width="88" alt="SSH Files icon"></p>
 
 <h1 align="center">SSH Files</h1>
-<p align="center"><strong>SFTP that uses your SSH setup.</strong></p>
+<p align="center"><strong>SFTP for the terminal you already use.</strong></p>
 
-Two panes, keyboard navigation, and a transfer queue. Open an existing SSH alias,
-review what will move, and browse the server while files transfer. No second
-address book to maintain.
+Browse both sides, select a batch with the keyboard or mouse, and queue the
+transfer. Keep browsing while it runs. SSH Files uses your existing OpenSSH
+aliases; SSH Sessions can supply its machine catalog and the route for this device.
 
 ![SSH Files browsing local and remote files](docs/assets/browser.svg)
 
@@ -29,16 +29,20 @@ address book to maintain.
 
 ## Install
 
+> **0.2.0 release candidate:** the commands below target the new release.
+> Its assets and HTTPS installation checks are pending. The qualified published
+> version is [0.1.0](https://github.com/brant92good/ssh-files/tree/v0.1.0#install).
+
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/brant92good/ssh-files/v0.1.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/brant92good/ssh-files/v0.2.0/install.ps1 | iex
 ```
 
 Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/brant92good/ssh-files/v0.1.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/brant92good/ssh-files/v0.2.0/install.sh | sh
 ```
 
 The installer downloads a compiled binary, verifies its checksum, and adds the
@@ -69,11 +73,16 @@ and hardlink support on the destination filesystem. [Connection details](docs/us
 | Tab, arrows, Enter | Switch panes, select, open a folder |
 | Type, F3 | Filter files; edit or clear the filter |
 | Space | Mark or unmark an entry |
+| . | Show or hide hidden files when the filter is empty |
 | F5 | Review selected uploads or downloads |
 | F9 / Ctrl+S | Start the reviewed queue |
 | F6 | Paste local paths for upload |
 | Esc / Ctrl+C | Stop work; Ctrl+C also works inside a dialog |
 | F10 / Ctrl+Q | Close Files; confirm when a queue is active |
+
+You can also click to select, double-click to open a folder, and scroll the pane
+under the pointer. Ctrl-click toggles a mark; Shift-click or dragging selects a
+range. [Mouse controls and limits](docs/usage.md#browse-and-select).
 
 ![Reviewing destinations before a transfer starts](docs/assets/review.svg)
 
