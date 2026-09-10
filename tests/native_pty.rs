@@ -206,11 +206,15 @@ fn actual_sftp_keyboard_paste_review_collisions_recursive_upload_and_download() 
     let data: Vec<u8> = (0..131_079).map(|n| n as u8).collect();
     std::fs::write(&source, &data).unwrap();
     let remote = target.path().to_str().unwrap().replace('\\', "/");
+    let ready_marker = target.path().join("ready-for-upload");
+    std::fs::write(&ready_marker, b"fixture ready").unwrap();
     let mut session = Session::start(Path::new(&config), local.path(), &remote);
     session.expect("SSH FILES");
-    session.expect("Choose files");
-    // A separate path-editor attempt waits until both lists actually loaded.
-    session.settle();
+    // Either directory can finish first. Observe one actual entry in each
+    // pane instead of assuming a fixed startup delay means both are ready.
+    session.expect(source.file_name().unwrap().to_str().unwrap());
+    session.expect("ready-for-upload");
+    std::fs::remove_file(ready_marker).unwrap();
     session.send(F6);
     session.expect("Upload local paths");
     #[cfg(windows)]

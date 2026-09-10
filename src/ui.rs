@@ -1161,11 +1161,12 @@ mod tests {
     }
     #[tokio::test]
     async fn one_planner_owns_review_and_does_not_replace_an_open_editor() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("file"), b"data").unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        std::fs::write(root.as_path().join("file"), b"data").unwrap();
         let mut app = app();
         app.local.replace(
-            crate::browser::list_local(root.path(), &std::sync::atomic::AtomicBool::new(false))
+            crate::browser::list_local(root.as_path(), &std::sync::atomic::AtomicBool::new(false))
                 .unwrap(),
         );
         app.local_ready = true;

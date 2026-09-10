@@ -195,5 +195,21 @@ fn running(pid: u32) -> bool {
     {
         return false;
     }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        // A stopped but deliberately unreaped own child still passes kill(0).
+        // Observe its exit without stealing the worker's later reap.
+        let mut status = std::mem::zeroed::<libc::siginfo_t>();
+        if libc::waitid(
+            libc::P_PID,
+            pid,
+            &mut status,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        ) == 0
+            && status.si_pid != 0
+        {
+            return false;
+        }
+    }
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }

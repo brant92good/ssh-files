@@ -175,10 +175,19 @@ mod tests {
     #[test]
     fn undecodable_parent_is_never_replaced_with_a_neighboring_action_path() {
         use std::os::unix::ffi::OsStringExt;
-        let root = tempfile::tempdir().unwrap();
-        let invalid = root.path().join(std::ffi::OsString::from_vec(vec![0xff]));
-        let neighbor = root.path().join("\u{fffd}");
-        std::fs::create_dir(&invalid).unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let invalid = root.join(std::ffi::OsString::from_vec(vec![0xff]));
+        let neighbor = root.join("\u{fffd}");
+        match std::fs::create_dir(&invalid) {
+            Ok(()) => {}
+            // APFS itself rejects byte paths that cannot be decoded. The
+            // app must still reject the supplied path without selecting its
+            // valid replacement-character neighbor.
+            Err(error)
+                if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EILSEQ) => {}
+            Err(error) => panic!("Could not create invalid-byte fixture: {error}"),
+        }
         std::fs::create_dir(&neighbor).unwrap();
         assert!(checked_local(&invalid, false).is_err());
         assert!(

@@ -317,8 +317,9 @@ mod tests {
     }
     #[test]
     fn queue_caps_collisions_and_directory_order_are_checked_before_transfer() {
-        let root = tempfile::tempdir().unwrap();
-        let folder = root.path().join("folder");
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let folder = root.join("folder");
         std::fs::create_dir(&folder).unwrap();
         std::fs::write(folder.join("item"), b"hello").unwrap();
         let jobs = upload(&[folder], "/remote", &AtomicBool::new(false)).unwrap();
@@ -330,7 +331,7 @@ mod tests {
         assert_eq!(renamed[1].source, jobs[1].source);
         skip(&mut renamed, 0);
         assert!(renamed.is_empty());
-        let first = root.path().join("same");
+        let first = root.join("same");
         std::fs::write(&first, b"x").unwrap();
         assert!(upload(&[first.clone(), first], "/remote", &AtomicBool::new(false)).is_err());
     }
