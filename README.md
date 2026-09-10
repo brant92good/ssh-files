@@ -11,9 +11,8 @@ address book to maintain.
 
 *Rendered by the native application with example files and routes.*
 
-> **Development preview.** The first compiled release is being qualified.
-> Source builds work now; public one-command installers will follow the release
-> checks. macOS will remain beta until real desktop use is qualified.
+> **Beta.** Windows and Linux transfer flows are tested with real OpenSSH.
+> macOS builds and terminal checks run in CI; desktop use remains beta.
 
 ## What it does
 
@@ -28,28 +27,39 @@ address book to maintain.
 - **See interrupted work.** Details shows retained partials and any destination
   whose completion could not be confirmed. Transfers stop when Files closes.
 
-## Try the source build
+## Install
 
-Contributors need Rust 1.94.0 and system OpenSSH. The planned release installers
-download a compiled binary; end users will not need Rust, Python or Git.
+Windows PowerShell:
 
-```sh
-cargo +1.94.0 build --release --locked --bin ssh-files
-./target/release/ssh-files --host devbox
+```powershell
+irm https://raw.githubusercontent.com/brant92good/ssh-files/v0.1.0/install.ps1 | iex
 ```
 
-On Windows, run `target/release/ssh-files.exe --host devbox`.
-Replace `devbox` with an alias that already works with `ssh devbox`.
+Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/brant92good/ssh-files/v0.1.0/install.sh | sh
+```
+
+The installer downloads a compiled binary, verifies its checksum, and adds the
+command to your user PATH. No Rust, Python or Git is needed. Run the same command
+to reinstall this version; unrelated files in the installation directory stay put.
+Open a new terminal, then choose an alias that already works with `ssh`:
+
+```sh
+ssh-files --host devbox
+```
 
 To use a separate SSH config or start in particular directories:
 
 ```sh
-./target/release/ssh-files --host devbox --config ~/.ssh/work-config --local ~/project --remote /srv/project
+ssh-files --host devbox --config ~/.ssh/work-config --local ~/project --remote /srv/project
 ```
 
-Files requires noninteractive SSH authentication and a known, verified host key.
-If SSH needs a login or trust prompt, complete that in an ordinary SSH session
-first. Upload finalization currently requires the OpenSSH SFTP hardlink extension
+Files needs SSH authentication that works without a prompt, such as a key already
+usable by your system SSH or its agent. Connect with ordinary `ssh` to verify a
+new host key first; a successful password login alone does not enable Files.
+Upload finalization currently requires the OpenSSH SFTP hardlink extension
 and hardlink support on the destination filesystem. [Connection details](docs/usage.md#connecting).
 
 ## The short keyboard guide
@@ -84,9 +94,9 @@ without rebuilding the connection in another app.
 
 | Platform | Current qualification |
 | --- | --- |
-| Windows x64 | Native tests and real hidden ConPTY + OpenSSH transfer flows passed |
-| Linux x64 / ARM64 | Hosted UI qualification in progress; earlier transport proof passed |
-| macOS Apple silicon / Intel | Planned compiled builds; beta, desktop use unqualified |
+| Windows x64 | Compiled binary; real hidden ConPTY + OpenSSH transfer tests |
+| Linux x64 / ARM64 | Compiled binaries; real PTY + OpenSSH transfer and shutdown tests |
+| macOS Apple silicon / Intel | Compiled binaries and hosted terminal checks; **beta** |
 
 The tests include actual file bytes, collisions, cancellation, host-key refusal,
 explicit proxy routes, and a server reply lost after a successful finalization.
@@ -95,6 +105,10 @@ still pending. There is no native drag-out or transfer-resume feature. Terminal
 file-drop behavior is unqualified; **F6 paste paths** is the supported input flow.
 
 ## Contributing
+
+For source builds, install Rust 1.94.0 and run
+`cargo +1.94.0 build --release --locked --bin ssh-files` in a clone of this repo.
+The binary is `target/release/ssh-files` (`ssh-files.exe` on Windows).
 
 Start with [the design and worker boundaries](docs/implementation.md). Run
 `cargo +1.94.0 test --locked --all-targets` and

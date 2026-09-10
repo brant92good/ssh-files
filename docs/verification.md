@@ -1,32 +1,47 @@
 # Verification and limits
 
-The first release is still in qualification. The release workflow builds all
-five targets, packages only the tested UI, then runs each platform's installer
-against the actual tagged HTTPS downloads. Passing a source test is not the same
-as qualifying a release asset.
+The [0.1.0 beta release](https://github.com/brant92good/ssh-files/releases/tag/v0.1.0)
+contains five compiled UI binaries. The release workflow tests and packages each
+one, publishes immutable assets, then exercises the tagged HTTPS installer on
+Windows, both Linux architectures, and both macOS architectures.
+[The tagged release run](https://github.com/brant92good/ssh-files/actions/runs/34450038417)
+passed all eleven jobs at commit `e8cde5f`.
 
-## Observed before publication
+## What was exercised
 
-Windows x64 has passed real, hidden ConPTY tests against the compiled static-CRT
-UI. The latest candidate's two actual SFTP tests passed in 22.73 s; its preceding
-candidate was also independently replayed in 23.22 s. They covered Unicode
-multiline path input, separate review/start keys, upload and download bytes,
-collision pause/rename, recursive folders, and a fresh browser request while a
-transfer was deliberately stalled. Cancellation and confirmed close stopped
-both owned SSH connections; abrupt process termination did too. These are
-fixture observations, not timing promises across computers.
+| Platform | Observed checks |
+| --- | --- |
+| Windows x64 | Static-CRT UI; real hidden ConPTY and OpenSSH file transfers; fresh install, update, checksum rejection and polluted environment |
+| Linux x64 / ARM64 | Musl UI; real PTY and OpenSSH file transfers, bracketed paste, terminal EOF and SIGTERM cleanup; actual HTTPS installs |
+| macOS Apple silicon / Intel | Native build, library and ordinary PTY tests, Clippy, packaging and actual HTTPS installs; desktop use remains beta |
 
-The Linux x64 proof passed actual bracketed paste, the same file operations,
-strict host-key refusal, explicit proxy routing and lost-finalization replies.
-PTY EOF and SIGTERM stopped both owned SSH processes and left no interrupted
-final file. The first EOF run exposed a terminal-library error-reporting abort
-after successful transport cleanup. Its teardown fix has passed a targeted unit test and
-Windows regression checks; Linux clean-exit replay remains pending.
+The published Windows binary was also replayed locally through the hidden
+ConPTY fixture: both actual SFTP tests passed in 22.75 s. Its SHA-256 is
+`591f7609d470ca970b59df0212cf904a74af8474fcb2ae594ef65955220a51f3`,
+matching the release sidecar and the separately exercised tagged installer.
+These are fixture observations, not timing promises across computers.
+
+Actual transfer tests compare uploaded/downloaded bytes, preserve existing
+files, rename collisions, and review recursive folders before starting. The
+browser must fetch a newly created remote marker while a transfer is stalled,
+which checks that its separate connection remains usable. Pasted newlines and
+Enter must not start transfers; F9 does.
+
+Transport tests use strict host-key refusal, an explicit ProxyCommand, a
+selected hostname override, deliberate network stalls, and a successful server
+finalization whose reply is withheld. The last case must preserve both paths
+and report completion as unknown; it must not retry or delete them.
+
+Both Linux architectures now close after PTY EOF and SIGTERM with exit status
+0, both owned SSH processes gone, and no interrupted final file. A previous run
+found a terminal-library destructor abort after successful SSH cleanup. The
+regression now requires both the process exit status and cleanup assertions.
 
 Unit and integration tests cover bounded SFTP frames and raw directory pages,
 unsafe and lossy names, path collisions, recursive limits, process registry
 races, stale results, and cancelled local I/O. The ordinary PTY test verifies
-that text input is actually consumed before closing.
+that text input is consumed before closing. These observations do not qualify
+every SSH server, credential provider or filesystem.
 
 ## Reproducing the checks
 

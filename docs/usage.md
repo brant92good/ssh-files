@@ -20,8 +20,10 @@ There is no separate connection catalog and no automatic fallback route.
 
 Arguments are passed to system OpenSSH separately. Files requires `BatchMode=yes`
 and `StrictHostKeyChecking=yes`; it will not answer a password, passphrase or
-first-connection trust prompt. Resolve that in a normal SSH session and retry.
-OpenSSH reads identity, include and proxy settings. Windows agent-only credentials
+first-connection trust prompt. Authentication must already work without a
+prompt, through an available key or agent. Use ordinary `ssh` to verify a new
+host key first; completing a password login alone does not make authentication
+noninteractive. OpenSSH reads identity, include and proxy settings. Windows agent-only credentials
 and ProxyJump still need their own qualification; a tested ProxyCommand fixture
 does not certify every tunnel provider.
 

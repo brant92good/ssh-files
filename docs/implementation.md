@@ -72,15 +72,16 @@ can reconnect on a later explicit transfer. Unknown finalization remains visible
 with its final and partial paths; no automatic retry or deletion. Runtime
 shutdown is bounded, while documentation preserves the local-filesystem limit.
 
-## Remaining gates
+## Release checks
 
-Test hostile/large directory pages, traversal and lossy names, destination
-collisions, recursive caps, bounded channels/progress, local-vs-network cancel
-state, keyboard/paste flows in an owned PTY and actual SFTP transfers. Review
-the UI/code/README independently. Only then create a release repository/assets,
-qualify actual HTTPS installers and wire the workspace. macOS remains beta;
-agent-only Windows credentials, ProxyJump and native drag-out remain outside
-verified claims until their own tests pass.
+Changes to these boundaries require tests for hostile directory pages, unsafe
+and lossy names, destination collisions, recursive caps, bounded progress,
+local-versus-network cancellation, actual PTY input and owned SFTP transfers.
+Independent code and README review precedes publication; tagged assets must
+also pass the real HTTPS installers. [The verification record](verification.md)
+tracks observed coverage. macOS desktop use, agent-only Windows credentials,
+ProxyJump and native drag-out remain outside verified claims until their own
+tests pass.
 
 The process registry shares each existing Group through Arc/Mutex, keeping the
 sole Windows job handle and the unreaped Unix leader identity. UI close seals
