@@ -83,8 +83,9 @@ In the review, **F2** changes a destination name and **Delete** skips an item.
 ## Who might find it useful
 
 People who work in a terminal but still want to see both sides before copying
-builds, datasets, logs, or project files. It works as a standalone app; the
-planned SSH Sessions integration will open it on the selected device route.
+builds, datasets, logs, or project files. It works as a standalone app. In
+[SSH Sessions 0.7.0](https://github.com/brant92good/ssh-session-tui/releases/tag/v0.7.0),
+press **X** to open Files using the selected machine and device route.
 
 Use `scp` for a quick known-path copy, or `rsync` when you need synchronization
 or resumable bulk transfers. SSH Files is for browsing and reviewing a batch
