@@ -180,9 +180,10 @@ fn owned_terminal_printable_input_and_failed_connection_remain_safe() {
     let config = root.path().join("config");
     std::fs::write(&config, "Host fixture\n HostName 127.0.0.1\n Port 1\n IdentityAgent none\n UserKnownHostsFile none\n").unwrap();
     std::fs::write(root.path().join("quit upload.txt"), b"unchanged").unwrap();
-    let mut session = Session::start(&config, root.path(), ".");
+    let local = root.path().canonicalize().unwrap();
+    let mut session = Session::start(&config, &local, ".");
     session.expect("SSH FILES");
-    session.expect("Choose files");
+    session.expect("quit upload.txt");
     session.send("quit upload.txt\r");
     session.expect("filter: quit upload.txt");
     assert!(session.child.try_wait().unwrap().is_none());
