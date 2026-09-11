@@ -1,5 +1,27 @@
 # Verification and limits
 
+## Pane-drag development branch (2026-09-12)
+
+The isolated source branch adds Left/Right pane focus, F3-only filtering,
+cross-pane direct transfers and complete absolute-path paste admission. The
+Windows input reader is unchanged. An ordinary unframed path opens a manual
+draft; actual Explorer gesture detection is still pending.
+
+Forty-four active model/library checks and four ordinary hidden ConPTY checks
+passed. Four actual Windows ConPTY/OpenSSH cases then passed together in 22.27s:
+the new range-marked direct upload/download and no-clobber case, existing manual
+F6/F5/F9 transfers, remote browsing, and folder creation. A separate direct-drag
+stalled-transfer test passed in 11.19s; Ctrl+C, normal close and abrupt process
+exit stopped both owned transports (observed 0.39s, 0.42s and 0.06s respectively)
+while the final file remained absent. The browser still refreshed during the
+paused transfer. These measurements are fixture observations, not timing promises.
+
+Generation/revision rejection, once-only release, invalid targets, queue caps,
+literal fallback and cancelled-planner admission have model checks. Linux
+bracketed-paste and direct-drag tests are prepared but not yet executed for this
+source. macOS remains beta. No new release, installation or desktop-gesture
+qualification is claimed by these Windows results.
+
 ## Released 0.2.0 browser
 
 [The 0.2.0 native run](https://github.com/brant92good/ssh-files/actions/runs/34521127347)
@@ -15,9 +37,9 @@ remote mouse navigation, hidden entries, transfers, collisions and cancellation.
 Both PowerShell 5.1 and 7 HTTPS install/update/tamper checks passed in isolated
 directories. This does not qualify actual Explorer dragging or macOS desktop use.
 
-## Next release: file-manager controls
+## Historical file-manager checks before 0.3.0 publication
 
-The development branch adds Ctrl+A selection, Ctrl+O sorting, an Insert/F9
+That development branch added Ctrl+A selection, Ctrl+O sorting, an Insert/F9
 create-folder form, and scrollable help. Forty-four active Windows checks passed,
 including actual ConPTY Ctrl+Shift+A and the final help row at 60×16. A separate
 real SFTP case created a Unicode folder, refused an existing destination and

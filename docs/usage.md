@@ -33,9 +33,10 @@ processes. It does not close independently opened shells or Ports forwards.
 
 ## Browse and select
 
-Tab changes panes. Arrows select an entry; Enter opens a folder. Backspace
+Left focuses Local, Right focuses Remote, and Tab changes panes. Up/Down select
+an entry; Enter opens a folder. Backspace
 removes a filter character, or goes up one directory when the filter is empty.
-F2 opens a directory-path editor. Type to filter, or use F3 then Ctrl+A to clear
+F2 opens a directory-path editor. F3 edits the filter; use Ctrl+A there to clear
 the filter. Space marks an entry; when nothing is marked, F5 uses the highlighted
 entry. An exclamation mark identifies an unsupported name or file type; F4
 explains it.
@@ -59,8 +60,17 @@ dragging selects a range. A range stays within one pane and cannot exceed 1,000
 entries. Rejected entries are skipped. To extend a drag beyond the visible list,
 use the wheel while holding the button; moving beyond the edge alone does not
 scroll. Keyboard input, filtering, refresh, dialogs and resizing end the current
-gesture. Mouse actions inside dialogs are ignored. These controls select entries
-inside Files; they do not drag files to or from another application.
+gesture. Mouse actions inside dialogs are ignored.
+
+Drag into the opposite pane and release on a folder or blank file-list space to
+transfer directly. A file row, pane heading or outside area is not a destination.
+Starting on a marked row carries its whole batch through source-pane motion.
+Starting on an unmarked row, or using explicit range modifiers, still selects a
+range. The hover message shows upload/download and the destination.
+The gesture is consumed once. Both pane snapshots must still match when planning
+finishes; otherwise nothing starts. Direct transfers require an idle queue and
+two ready panes. They skip the review but retain collision and cancellation rules.
+These terminal gestures do not establish OS drag-and-drop between applications.
 
 F8 refreshes the active pane and reconnects its browser if needed. The browser
 and transfer queue are independent; a browser refresh does not restart or stop
@@ -97,7 +107,20 @@ command. Press F5 to prepare the review, then F9 to transfer. Windows terminal
 pastes can arrive as individual keys; the dedicated editor and separate start
 key keep newline input from starting an upload.
 
-The queue runs one item at a time, with at most 1,000 reviewed entries. Recursive
+Outside an editor, a complete terminal paste containing only absolute native
+local paths requests a **direct upload to the current remote folder**. Quote
+each path containing spaces. All paths must pass validation before any starts;
+relative, ambiguous or failed path input is kept in the manual draft. No shell
+expansion or commands run. A pasted path may upload even when it was copied
+rather than dragged: terminal paste events do not identify that distinction.
+
+Windows currently delivers many terminal pastes and drops as individual keys.
+Ordinary text now opens a literal local-path draft instead of filtering the pane.
+Use F5 then F9 to review and upload that draft; use F3 to filter. This workaround
+does not claim that an Explorer drag gesture is detected. The Windows input
+adapter and actual Explorer gesture qualification remain separate pending work.
+
+The queue runs one item at a time, with at most 1,000 planned entries. Recursive
 planning stops at 10,000 inspected entries or depth 64. Links, reparse points,
 special files, unsafe names and portable case/normalization collisions are
 rejected. There is no recursive delete or overwrite command.

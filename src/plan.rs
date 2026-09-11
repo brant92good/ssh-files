@@ -267,6 +267,54 @@ pub async fn download(browser: &Browser, sources: &[String], local: &Path) -> Re
     Ok(jobs)
 }
 
+/// A complete terminal paste can request an upload only when every token is an
+/// absolute native path. No shell expansion, escaping, or filesystem work here.
+/// Ambiguous text goes to the manual path editor instead of partly uploading.
+pub fn atomic_paths(value: &str) -> Result<Vec<PathBuf>> {
+    ensure!(value.len() <= 64 * 1024, "Paste is too large");
+    ensure!(
+        !value
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\r' | '\n' | '\t')),
+        "Control characters are not path text"
+    );
+    let mut rest = value.trim();
+    let mut result = Vec::new();
+    while !rest.is_empty() {
+        let (path, following) = if rest.starts_with(['\"', '\'']) {
+            let quote = rest.chars().next().unwrap();
+            let end = rest[1..].find(quote).context("Unclosed path quote")? + 1;
+            let following = &rest[end + 1..];
+            ensure!(
+                following.is_empty() || following.starts_with(char::is_whitespace),
+                "Quoted paths must be separated by whitespace"
+            );
+            (&rest[1..end], following)
+        } else {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            (&rest[..end], &rest[end..])
+        };
+        ensure!(
+            !path.is_empty() && path.len() <= 4096 && !path.chars().any(char::is_control),
+            "Invalid path text"
+        );
+        let path = PathBuf::from(path);
+        ensure!(path.is_absolute(), "Use complete absolute local paths");
+        ensure!(result.len() < paths::QUEUE_LIMIT, "Too many paths");
+        result.push(path);
+        ensure!(
+            !following
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .any(|c| c.is_control() && c != '\r' && c != '\n' && c != '\t'),
+            "Invalid path separator"
+        );
+        rest = following.trim_start();
+    }
+    ensure!(!result.is_empty(), "Paste one or more absolute local paths");
+    Ok(result)
+}
+
 /// Explorer's quoted paths and one path per line. Never apply shell escaping
 /// or execute pasted text. Unquoted text with spaces denotes one path.
 pub fn pasted_paths(value: &str) -> Result<Vec<PathBuf>> {
@@ -301,6 +349,27 @@ pub fn pasted_paths(value: &str) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn complete_path_paste_is_all_or_nothing_and_never_shell_expands() {
+        let root = tempfile::tempdir().unwrap().path().to_path_buf();
+        let first = root.join("space 開發 $;&.txt");
+        let second = root.join("O'Brien.txt");
+        let input = format!("\"{}\" \"{}\"\r\n", first.display(), second.display());
+        assert_eq!(atomic_paths(&input).unwrap(), vec![first.clone(), second]);
+        for bad in [
+            format!("{input} relative.txt"),
+            format!("\"{}", first.display()),
+            format!("\"{}\"junk", first.display()),
+            "~/.ssh/key".into(),
+            "$(command)".into(),
+            "x".repeat(65537),
+            format!("\"{}\u{1b}\"", first.display()),
+        ] {
+            assert!(atomic_paths(&bad).is_err(), "accepted {bad:?}");
+        }
+        let too_many = format!("\"{}\" ", first.display()).repeat(paths::QUEUE_LIMIT + 1);
+        assert!(atomic_paths(&too_many).is_err());
+    }
     #[test]
     fn pasted_shell_characters_are_literal_data() {
         let paths = pasted_paths("\"C:\\space 開發\\x$;&.txt\" \"C:\\other.txt\"\n/tmp/space file")

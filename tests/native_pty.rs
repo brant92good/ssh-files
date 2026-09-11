@@ -146,9 +146,12 @@ impl Session {
         }
     }
     fn clear_filter(&mut self) {
+        self.filter("");
+    }
+    fn filter(&mut self, text: &str) {
         self.send(F3);
         self.expect("Filter files");
-        self.send("\x01\r");
+        self.send(&format!("\x01{text}\r"));
         self.settle();
     }
     fn upload_review(&mut self, source: &Path) {
@@ -227,7 +230,15 @@ fn owned_terminal_printable_input_and_failed_connection_remain_safe() {
     session.expect("SSH FILES");
     session.expect("quit upload.txt");
     session.send("quit upload.txt\r");
-    session.expect("filter: quit upload.txt");
+    session.expect("Upload local paths");
+    session.expect("quit upload.txt");
+    assert!(
+        !session
+            .parser
+            .screen()
+            .contents()
+            .contains("filter: quit upload.txt")
+    );
     assert!(session.child.try_wait().unwrap().is_none());
     assert!(session.parser.screen().contents().contains("0 complete"));
     session.exit();
@@ -363,7 +374,8 @@ fn actual_sftp_create_folder_has_explicit_confirmation_and_preserves_existing_en
     );
     session.send("\x1b");
     session.expect("F6 paste paths");
-    session.send("folder 開發\r");
+    session.filter("folder 開發");
+    session.send("\r");
     session.expect("0 shown");
     session.exit();
 }
@@ -400,8 +412,11 @@ fn owned_terminal_sgr_mouse_selects_ranges_scrolls_hovered_pane_and_opens_folder
     session.mouse(0, (100, four.1), true);
     session.settle();
     assert!(session.parser.screen().contents().contains("4 marked"));
-    session.mouse(0, one, false);
-    session.mouse(32, five, false);
+    // Start this new range on an unmarked row. A marked-row drag now carries
+    // its complete existing batch through source-pane movement.
+    let zero = session.position("item-00");
+    session.mouse(0, zero, false);
+    session.mouse(32, four, false);
     // A changed count proves this new drag was consumed before resizing.
     session.expect("5 marked");
     session.resize(12, 40);
@@ -616,7 +631,7 @@ fn actual_sftp_keyboard_paste_review_collisions_recursive_upload_and_download() 
     session.send("\t");
     session.send(F8);
     session.settle();
-    session.send("alternate.txt");
+    session.filter("alternate.txt");
     session.settle();
     session.send(F5);
     session.expect("Review transfers");
@@ -703,12 +718,21 @@ fn actual_stalled_transfer_cancel_close_and_navigation_ownership() {
             + "\n HostKeyAlias fixture-key\n";
         std::fs::write(&selected_config, text).unwrap();
         let remote = target.path().to_str().unwrap().replace('\\', "/");
+        let ready = target.path().join("direct-drag-ready");
+        std::fs::write(&ready, b"owned readiness marker").unwrap();
         let mut session = Session::start(&selected_config, local.path(), &remote);
         session.expect("SSH FILES");
-        session.expect("Choose files");
-        session.settle();
-        session.upload_review(&source);
-        session.send(F9);
+        session.expect("large.bin");
+        session.expect("direct-drag-ready");
+        std::fs::remove_file(ready).unwrap();
+        // This direct drag enters the same cancellable worker/queue used by
+        // reviewed transfers, without an intervening F5/F9 confirmation.
+        let from = session.position("large.bin");
+        let to = (100, from.1 + 4); // Blank space in the remote file list.
+        session.mouse(0, from, false);
+        session.mouse(32, to, false);
+        session.expect("Release to upload");
+        session.mouse(0, to, true);
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if std::fs::read_dir(target.path()).unwrap().any(|entry| {
@@ -772,6 +796,176 @@ fn actual_stalled_transfer_cancel_close_and_navigation_ownership() {
         );
         drop(session);
     }
+}
+
+#[test]
+#[ignore = "Requires explicit disposable SFTP fixture environment; never uses user SSH files"]
+fn actual_sftp_cross_pane_drop_upload_download_and_no_clobber() {
+    let config = std::env::var_os("SSH_FILES_TEST_CONFIG").expect("SSH_FILES_TEST_CONFIG");
+    let server = std::path::PathBuf::from(
+        std::env::var_os("SSH_FILES_TEST_REMOTE").expect("SSH_FILES_TEST_REMOTE"),
+    );
+    let target = tempfile::Builder::new()
+        .prefix("pane-drop-owned-")
+        .tempdir_in(server)
+        .unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let local = local.path().canonicalize().unwrap();
+    let download = local.join("a-download");
+    let destination = target.path().join("a-destination");
+    std::fs::create_dir(&download).unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    std::fs::write(local.join("upload-a.txt"), b"first upload").unwrap();
+    std::fs::write(local.join("upload-b.txt"), b"second upload").unwrap();
+    std::fs::write(local.join("z-stay-local.txt"), b"not selected").unwrap();
+    std::fs::write(local.join(".hidden-kept"), b"hidden").unwrap();
+    std::fs::write(target.path().join("remote-data.txt"), b"download bytes").unwrap();
+    let remote = target.path().to_str().unwrap().replace('\\', "/");
+    let mut session = Session::start(Path::new(&config), &local, &remote);
+    session.expect("upload-b.txt");
+    session.expect("remote-data.txt");
+    // Left/Right choose an absolute pane, including repeated keys.
+    session.send("\x1b[C\x1b[C");
+    session.send(F2);
+    session.expect("Remote directory");
+    session.send("\x1b");
+    session.expect("F6 paste paths");
+    session.send("\x1b[D\x1b[D");
+    session.send(F2);
+    session.expect("Local directory");
+    session.send("\x1b");
+    session.expect("F6 paste paths");
+    #[cfg(windows)]
+    {
+        session.send(&format!("\"{}\"", local.join("upload-a.txt").display()));
+        session.expect("Upload local paths");
+        session.settle();
+        assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 0);
+        assert!(!session.parser.screen().contents().contains("filter:"));
+        session.send("\x1b");
+        session.expect("F6 paste paths");
+    }
+    let a = session.position("upload-a.txt");
+    let b = session.position("upload-b.txt");
+    session.click(0, a);
+    session.click(4, b);
+    session.expect("2 marked");
+    let remote_folder = session.position("a-destination");
+    session.mouse(0, a, false);
+    session.mouse(32, (a.0 + 3, a.1), false);
+    session.expect("2 marked");
+    let unmarked = session.position("z-stay-local.txt");
+    session.mouse(32, unmarked, false);
+    session.expect("2 marked");
+    session.mouse(32, remote_folder, false);
+    session.expect("Release to upload");
+    session.mouse(0, remote_folder, true);
+    session.expect("2 complete");
+    assert!(
+        !session
+            .parser
+            .screen()
+            .contents()
+            .contains("Review transfers")
+    );
+    assert_eq!(
+        std::fs::read(destination.join("upload-a.txt")).unwrap(),
+        b"first upload"
+    );
+    assert_eq!(
+        std::fs::read(destination.join("upload-b.txt")).unwrap(),
+        b"second upload"
+    );
+    assert!(!destination.join(".hidden-kept").exists());
+    assert!(!destination.join("z-stay-local.txt").exists());
+    session.mouse(0, remote_folder, true);
+    session.settle(); // Duplicate release cannot dispatch twice.
+    assert!(session.parser.screen().contents().contains("2 complete"));
+    assert!(!session.parser.screen().contents().contains("Stopped:"));
+    // A new gesture to the existing names must pause, keeping original bytes.
+    session.mouse(0, a, false);
+    session.mouse(32, remote_folder, false);
+    session.mouse(0, remote_folder, true);
+    session.expect("Stopped:");
+    assert_eq!(
+        std::fs::read(destination.join("upload-a.txt")).unwrap(),
+        b"first upload"
+    );
+    assert_eq!(
+        std::fs::read(destination.join("upload-b.txt")).unwrap(),
+        b"second upload"
+    );
+    session.send("\x03");
+    session.expect("Stopping requested work");
+    let from = session.position("remote-data.txt");
+    session.mouse(0, from, false);
+    session.mouse(32, a, false);
+    session.mouse(0, a, true);
+    session.expect("a file is not a destination folder");
+    assert!(!local.join("remote-data.txt").exists());
+    let to = session.position("a-download");
+    session.settle(); // Separate the new drag from the previous plain click.
+    session.mouse(0, from, false);
+    session.mouse(32, to, false);
+    session.expect("Release to download");
+    session.mouse(0, to, true);
+    session.expect("3 complete");
+    assert_eq!(
+        std::fs::read(download.join("remote-data.txt")).unwrap(),
+        b"download bytes"
+    );
+    assert!(!local.join("remote-data.txt").exists());
+    session.exit();
+    println!(
+        "PASS: actual PTY arrows, range-marked direct upload, one release, no-clobber pause, file-target refusal, direct download to named folder; no Explorer gesture simulated"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "Requires explicit disposable SFTP fixture environment and Unix bracketed paste"]
+fn actual_sftp_complete_absolute_path_paste_uploads_directly() {
+    let config = std::env::var_os("SSH_FILES_TEST_CONFIG").expect("SSH_FILES_TEST_CONFIG");
+    let server = std::path::PathBuf::from(
+        std::env::var_os("SSH_FILES_TEST_REMOTE").expect("SSH_FILES_TEST_REMOTE"),
+    );
+    let target = tempfile::Builder::new()
+        .prefix("path-paste-owned-")
+        .tempdir_in(server)
+        .unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let local_path = local.path().canonicalize().unwrap();
+    let first = local_path.join("pasted 開發.txt");
+    let second = local_path.join("other.txt");
+    std::fs::write(&first, b"complete path paste").unwrap();
+    std::fs::write(&second, b"second").unwrap();
+    std::fs::write(target.path().join("ready-marker"), b"ready").unwrap();
+    let remote = target.path().to_str().unwrap();
+    let mut session = Session::start(Path::new(&config), &local_path, remote);
+    session.expect("pasted 開發.txt");
+    session.expect("ready-marker");
+    session.send(&format!(
+        "\x1b[200~\"{}\" \"{}\"\x1b[201~",
+        first.display(),
+        second.display()
+    ));
+    session.expect("2 complete");
+    assert_eq!(
+        std::fs::read(target.path().join(first.file_name().unwrap())).unwrap(),
+        b"complete path paste"
+    );
+    assert_eq!(
+        std::fs::read(target.path().join(second.file_name().unwrap())).unwrap(),
+        b"second"
+    );
+    assert!(
+        !session
+            .parser
+            .screen()
+            .contents()
+            .contains("Review transfers")
+    );
+    session.exit();
 }
 
 #[cfg(windows)]

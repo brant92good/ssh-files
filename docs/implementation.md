@@ -6,6 +6,21 @@ create another machine catalog.
 
 ## Interfaces
 
+The pane-drag development branch keeps the existing input reader. Pointer
+gestures carry both directory paths and listing revisions; key input, modal,
+resize or replacement invalidates the gesture. Only a left down/drag/up from a
+supported source to the other file list emits a once-consumed transfer intent.
+Existing marks and same-pane range selection are preserved.
+
+`PlanIntent` binds Review or StartOnReady to the actual worker generation and
+both pane snapshots. A direct plan is admitted only while idle, occupies the
+existing tracked worker, and is checked again before entering the serial queue.
+Cancellation removes the intent, so a late worker result cannot start transfers.
+Errors preserve an atomic paste's literal text as a manual draft. The parser
+requires complete absolute native paths without shell interpretation; actual
+filesystem validation stays off the UI thread in the existing bounded planner.
+This is terminal input qualification, not proof of an Explorer drag gesture.
+
 - `ssh-files --host HOST [--hostname ADDRESS] [--config PATH] [--user USER] [--port PORT]`
   opens the UI. Optional machine ID, route ID and label are display/snapshot
   metadata, never keys for another catalog lookup. Local and remote starting
@@ -27,8 +42,9 @@ create another machine catalog.
 
 ## UI and worker boundaries
 
-Tab switches panes; arrows/Enter browse; Backspace goes up; Space marks entries;
-printable text filters and F2 opens a path editor. F5 builds an Upload/Download
+Tab switches panes; Left/Right choose Local/Remote; Up/Down/Enter browse;
+Backspace goes up; Space marks entries. F3 explicitly filters and F2 opens a path
+editor. Other printable text opens a literal manual path draft. F5 builds an Upload/Download
 review list; a distinct F9 or Ctrl+S starts it, never Enter or the same F5.
 F6 opens a local upload-path editor; pasted key text/newlines stay data there,
 with F5 building the review. This matters because crossterm on Windows does not
@@ -37,7 +53,7 @@ or quit. F1 opens help and F10/Ctrl+Q closes after confirming active transfers.
 Show file names, types, sizes, completed/remaining items and active byte progress.
 Hidden entries are off by default in both panes. With an empty filter, `.` toggles
 them; inside a filter/editor the period remains literal text. F3 edits a filter
-that starts with a period. Local listings flag dotnames and Windows hidden
+including one that starts with a period. Local listings flag dotnames and Windows hidden
 attributes in the existing worker; SFTP listings flag dotnames. Filtering changes
 only the view: a selected folder's recursive transfer still includes its hidden
 contents. Filtering removes now-invisible marks, and reloads preserve hidden
@@ -55,8 +71,9 @@ atomically. Rejected entries are excluded. Mouse capture is restored before raw
 mode on Windows, reversing capture's saved-console-mode order.
 
 A bounded queue contains at most 1,000 items; only one transfer runs. Esc cancels
-the current operation/queue. Pasted paths are data and reviewed before upload;
-they are not native drag-out support or shell commands.
+the current operation/queue. F6 path drafts require review; complete atomic path
+pastes and opposite-pane drops use StartOnReady. These are not native drag-out
+support or shell commands.
 
 Standalone folder creation has a separate frozen request and worker result;
 it cannot complete or start a transfer queue item. Insert opens the form and

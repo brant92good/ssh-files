@@ -14,12 +14,18 @@ aliases; SSH Sessions can supply its machine catalog and the route for this devi
 > **Beta.** Windows and Linux transfer flows are tested with real OpenSSH.
 > macOS builds and terminal checks run in CI; desktop use remains beta.
 
+> **Pane-drag development branch.** The controls described here add Left/Right
+> pane focus, direct transfers between panes, and complete path-paste uploads.
+> These changes are not in the 0.3.0 download below. Actual Explorer drop handling
+> is still pending; Windows text delivered as separate keys opens a manual draft.
+
 ## What it does
 
 - **Use the route you already have.** Your system `ssh` reads the alias and
   configuration, including a custom config file and `ProxyCommand`.
-- **Move files in either direction.** Filter a pane, mark files or folders, and
-  review every destination before starting. F6 accepts pasted local paths.
+- **Move files in either direction.** Use F3 to filter, then mark files or folders.
+  F5 opens a review, or drag across panes to transfer directly to the target folder.
+  F6 keeps the manual pasted-path review flow.
 - **Keep browsing during a transfer.** The browser and serial transfer queue
   have separate SSH sessions on the same selected route.
 - **Keep existing files.** A collision pauses the queue. Choose another name or
@@ -71,8 +77,10 @@ and hardlink support on the destination filesystem. [Connection details](docs/us
 
 | Key | Action |
 | --- | --- |
-| Tab, arrows, Enter | Switch panes, select, open a folder |
-| Type, F3 | Filter files; edit or clear the filter |
+| Left / Right, Tab | Focus Local / Remote, or switch panes |
+| Up / Down, Enter | Select an entry, open a folder |
+| F3 | Edit or clear the filter |
+| Ordinary text | Open a manual local-path draft; never filter implicitly |
 | Space | Mark or unmark an entry |
 | Ctrl+A / Ctrl+Shift+A | Select the filtered list / clear marks |
 | Ctrl+O | Cycle name and size sorting |
@@ -87,6 +95,10 @@ and hardlink support on the destination filesystem. [Connection details](docs/us
 You can also click to select, double-click to open a folder, and scroll the pane
 under the pointer. Ctrl-click toggles a mark; Shift-click or dragging selects a
 range. [Mouse controls and limits](docs/usage.md#browse-and-select).
+Drag marked entries onto a folder or blank file-list space in the other pane to
+upload or download immediately after planning. A complete, absolute local-path
+paste received as one terminal event also uploads to the current remote folder.
+These direct actions skip review; collisions still pause without replacing files.
 The [feature inventory](docs/file-manager.md) spells out what is implemented and
 where a shell or another file-transfer tool is still needed.
 
@@ -119,7 +131,8 @@ The tests include actual file bytes, collisions, cancellation, host-key refusal,
 explicit proxy routes, and a server reply lost after a successful finalization.
 [Evidence and limits](docs/verification.md) separate observed checks from work
 still pending. There is no native drag-out or transfer-resume feature. Terminal
-file-drop behavior is unqualified; **F6 paste paths** is the supported input flow.
+file-drop behavior is unqualified. **F6 paste paths** remains the explicit manual
+review flow; an unframed Windows path is kept there as a draft, not detected as a drop.
 
 ## Contributing
 

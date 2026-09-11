@@ -22,10 +22,11 @@ const BACK: Color = Color::Rgb(18, 24, 35);
 // Each line fits the smallest supported popup (52 columns).
 const HELP: &str = concat!(
     "Tab          Switch local / remote pane\n",
-    "Arrows       Select an entry\n",
+    "Up / Down    Select an entry\n",
+    "Left / Right Focus local / remote pane\n",
     "Enter        Open a folder\n",
     "Backspace    Remove filter text, otherwise go up\n",
-    "Type         Filter the current pane\n",
+    "Type         Open a manual local-path draft\n",
     ".            Toggle hidden files (empty filter)\n",
     "Space        Mark or unmark an entry\n",
     "Ctrl+A       Select the whole filtered list\n",
@@ -36,6 +37,9 @@ const HELP: &str = concat!(
     "Click        Select; double-click opens a folder\n",
     "Ctrl-click   Toggle a mark\n",
     "Shift-click or drag  Select a range\n",
+    "Drag across panes   Upload / download directly\n",
+    "Drop on a folder or blank file-list space.\n",
+    "Complete path paste uploads to current remote.\n",
     "F2           Enter a directory path\n",
     "F3           Edit / clear the filter\n",
     "F4           Connection details and retained paths\n",
@@ -296,7 +300,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         );
     }
     frame.render_widget(
-        Paragraph::new(paths::display(&app.status))
+        Paragraph::new(paths::display(app.pointer.hint().unwrap_or(&app.status)))
             .style(Style::default().fg(if app.safety.uncertain { RED } else { INK }))
             .wrap(Wrap { trim: false }),
         parts[3],

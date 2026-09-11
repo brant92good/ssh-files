@@ -65,7 +65,9 @@ pub(crate) struct App {
     history: VecDeque<String>,
     retained: Vec<String>,
     pending_review: Option<Vec<Job>>,
-    pointer: crate::pointer::Pointer,
+    plan_intent: Option<PlanIntent>,
+    pending_draft: Option<String>,
+    pub(crate) pointer: crate::pointer::Pointer,
     creating: Option<Creation>,
     shutting_down: bool,
     help_scroll_limit: u16,
@@ -74,6 +76,20 @@ pub(crate) struct App {
 struct Creation {
     request: crate::folders::Request,
     started: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlanMode {
+    Review,
+    StartOnReady,
+}
+struct PlanIntent {
+    local: bool,
+    generation: u64,
+    mode: PlanMode,
+    directories: [String; 2],
+    revisions: [u64; 2],
+    draft: Option<String>,
 }
 
 impl App {
@@ -114,6 +130,8 @@ impl App {
             history: VecDeque::new(),
             retained: Vec::new(),
             pending_review: None,
+            plan_intent: None,
+            pending_draft: None,
             pointer: crate::pointer::Pointer::default(),
             creating: None,
             shutting_down: false,
@@ -184,7 +202,11 @@ impl App {
             "Wait for folder creation to finish"
         );
         ensure!(
-            self.local_job.is_none() && self.remote_job.is_none() && self.pending_review.is_none(),
+            self.local_job.is_none()
+                && self.remote_job.is_none()
+                && self.pending_review.is_none()
+                && self.plan_intent.is_none()
+                && self.pending_draft.is_none(),
             "Wait for the current directory or transfer review to finish preparing"
         );
         ensure!(
@@ -295,18 +317,130 @@ impl App {
                 .into_iter()
                 .map(|name| PathBuf::from(&self.local.path).join(name))
                 .collect();
-            self.start_local(LocalAction::Plan(sources, self.remote.path.clone()))?;
+            self.plan_upload(sources, self.remote.path.clone(), PlanMode::Review, None)?;
         } else {
             let sources = names
                 .iter()
                 .map(|name| paths::remote_join(&self.remote.path, name))
                 .collect::<Result<Vec<_>>>()?;
-            self.start_remote(RemoteAction::Plan(sources, PathBuf::from(&self.local.path)))?;
+            self.plan_download(sources, PathBuf::from(&self.local.path), PlanMode::Review)?;
         }
         self.note(
             "Preparing a transfer list. No destination is changed until you start the review.",
         );
         Ok(())
+    }
+    fn remember_plan(&mut self, local: bool, mode: PlanMode, draft: Option<String>) {
+        self.plan_intent = Some(PlanIntent {
+            local,
+            generation: if local {
+                self.local_generation
+            } else {
+                self.remote_generation
+            },
+            mode,
+            directories: [self.local.path.clone(), self.remote.path.clone()],
+            revisions: [self.local.revision, self.remote.revision],
+            draft,
+        });
+    }
+    fn plan_upload(
+        &mut self,
+        sources: Vec<PathBuf>,
+        destination: String,
+        mode: PlanMode,
+        draft: Option<String>,
+    ) -> Result<()> {
+        self.check_queue_available()?;
+        self.start_local(LocalAction::Plan(sources, destination.clone()))?;
+        self.remember_plan(true, mode, draft);
+        if mode == PlanMode::StartOnReady {
+            self.note(format!(
+                "Preparing direct upload to {}. Escape cancels; existing files are preserved.",
+                paths::display(&destination)
+            ));
+        }
+        Ok(())
+    }
+    fn plan_download(
+        &mut self,
+        sources: Vec<String>,
+        destination: PathBuf,
+        mode: PlanMode,
+    ) -> Result<()> {
+        self.check_queue_available()?;
+        self.start_remote(RemoteAction::Plan(sources, destination.clone()))?;
+        self.remember_plan(false, mode, None);
+        if mode == PlanMode::StartOnReady {
+            self.note(format!(
+                "Preparing direct download to {}. Escape cancels; existing files are preserved.",
+                destination.display()
+            ));
+        }
+        Ok(())
+    }
+    fn finish_plan(&mut self, local: bool, generation: u64, result: Result<Vec<Job>>) {
+        if !self
+            .plan_intent
+            .as_ref()
+            .is_some_and(|intent| intent.local == local && intent.generation == generation)
+        {
+            return;
+        }
+        let intent = self.plan_intent.take().unwrap();
+        let result = result.and_then(|jobs| {
+            ensure!(
+                intent.directories == [self.local.path.clone(), self.remote.path.clone()]
+                    && intent.revisions == [self.local.revision, self.remote.revision],
+                "Directories or selection view changed during planning; nothing was transferred"
+            );
+            ensure!(
+                jobs.len() <= paths::QUEUE_LIMIT,
+                "Transfer plan exceeds the queue limit"
+            );
+            self.check_queue_available()?;
+            Ok(jobs)
+        });
+        match result {
+            Ok(jobs) if intent.mode == PlanMode::Review => self.pending_review = Some(jobs),
+            Ok(jobs) => {
+                self.queue = jobs.into();
+                self.note("Direct transfer queue started. Esc stops it; collisions pause without overwrite.");
+            }
+            Err(error) => {
+                self.note(format!("Transfer preparation stopped: {error:#}"));
+                if let Some(text) = intent.draft {
+                    self.pending_draft = Some(text);
+                }
+            }
+        }
+    }
+    fn drop_selection(&mut self, selection: crate::pointer::DropSelection) -> Result<()> {
+        self.check_queue_available()?;
+        ensure!(
+            selection.directories == [self.local.path.clone(), self.remote.path.clone()]
+                && selection.revisions == [self.local.revision, self.remote.revision],
+            "Directories changed during the drag; nothing was transferred"
+        );
+        if selection.source_pane == 0 {
+            let sources = selection
+                .names
+                .iter()
+                .map(|name| PathBuf::from(&selection.directories[0]).join(name))
+                .collect();
+            self.plan_upload(sources, selection.destination, PlanMode::StartOnReady, None)
+        } else {
+            let sources = selection
+                .names
+                .iter()
+                .map(|name| paths::remote_join(&selection.directories[1], name))
+                .collect::<Result<Vec<_>>>()?;
+            self.plan_download(
+                sources,
+                PathBuf::from(selection.destination),
+                PlanMode::StartOnReady,
+            )
+        }
     }
     fn navigate(&mut self, path: String) -> Result<()> {
         self.pointer.clear();
@@ -358,20 +492,31 @@ impl App {
             self.pointer.clear();
             return Ok(false);
         }
-        if let Some(pane) = self.pointer.event(
+        let action = self.pointer.event(
             event,
             [&mut self.local, &mut self.remote],
             &mut self.pane,
             Instant::now(),
-        )? {
-            self.pane = pane;
-            self.open_current()?;
+        );
+        if action.is_err() {
+            self.pointer.clear();
+        }
+        if let Some(action) = action? {
+            match action {
+                crate::pointer::Action::OpenDirectory(pane) => {
+                    self.pane = pane;
+                    self.open_current()?;
+                }
+                crate::pointer::Action::Transfer(selection) => self.drop_selection(selection)?,
+            }
         }
         Ok(false)
     }
     fn cancel(&mut self) {
         self.queue.clear();
         self.pending_review = None;
+        self.plan_intent = None;
+        self.pending_draft = None;
         self.failed = None;
         self.cancelling_queue = self.active.is_some();
         if let Some(transfer) = &self.transfer {
@@ -449,6 +594,9 @@ impl App {
             job.started.elapsed() >= crate::IDLE
                 && !job.cancel.load(std::sync::atomic::Ordering::Acquire)
         }) {
+            if self.plan_intent.as_ref().is_some_and(|intent| intent.local) {
+                self.pending_draft = self.plan_intent.take().and_then(|intent| intent.draft);
+            }
             self.local_generation = self.local_generation.wrapping_add(1);
             self.local_job.as_ref().unwrap().cancel();
             self.note("Local operation timed out; waiting for its filesystem worker before accepting more local work.");
@@ -488,12 +636,19 @@ impl App {
                     Ok(LocalValue::Listing(listing)) => {
                         self.local.replace(listing);
                         self.local_ready = true;
-                        self.note("Choose files, then F5 to review a transfer.");
+                        self.note("Choose files: F5 reviews. Complete path paste uploads to the remote folder.");
                     }
-                    Ok(LocalValue::Plan(jobs)) => self.pending_review = Some(jobs),
+                    Ok(LocalValue::Plan(jobs)) => self.finish_plan(true, generation, Ok(jobs)),
                     Ok(LocalValue::Directory) => {}
                     Ok(LocalValue::CreatedFolder(_)) => {
                         self.note("Unclaimed local folder result; refresh before retrying.")
+                    }
+                    Err(error)
+                        if self.plan_intent.as_ref().is_some_and(|intent| {
+                            intent.local && intent.generation == generation
+                        }) =>
+                    {
+                        self.finish_plan(true, generation, Err(error))
                     }
                     Err(error) => self.note(format!("Local: {error:#}")),
                 }
@@ -531,10 +686,11 @@ impl App {
                 self.finish_active(result.map(|_| ()), None);
             } else if generation == self.remote_generation {
                 match result {
-                    Ok(RemoteValue::Listing(listing)) => { self.remote.replace(listing); self.remote_ready = true; self.note("Choose files, then F5 to review a transfer."); },
-                    Ok(RemoteValue::Plan(jobs)) => self.pending_review = Some(jobs),
+                    Ok(RemoteValue::Listing(listing)) => { self.remote.replace(listing); self.remote_ready = true; self.note("Choose files: F5 reviews. Complete path paste uploads to the remote folder."); },
+                    Ok(RemoteValue::Plan(jobs)) => self.finish_plan(false, generation, Ok(jobs)),
                     Ok(RemoteValue::Directory) => {},
                     Ok(RemoteValue::CreatedFolder(_))=>self.note("Unclaimed remote folder result; refresh before retrying."),
+                    Err(error) if self.plan_intent.as_ref().is_some_and(|intent| !intent.local && intent.generation == generation) => self.finish_plan(false, generation, Err(error)),
                     Err(error) => self.note(format!("SSH: {error:#}. Resolve connection/trust in a normal SSH session, then F8 to retry.")),
                 }
             }
@@ -559,6 +715,14 @@ impl App {
                     Some(fallback),
                 ),
             }
+        }
+        if self.modal.is_none()
+            && let Some(text) = self.pending_draft.take()
+        {
+            self.modal = Some(Modal::Edit {
+                kind: EditKind::Paste,
+                text,
+            });
         }
         if self.modal.is_none()
             && let Some(jobs) = self.pending_review.take()
@@ -789,10 +953,12 @@ impl App {
                             }
                             EditKind::Paste => {
                                 self.check_queue_available()?;
-                                self.start_local(LocalAction::Plan(
+                                self.plan_upload(
                                     plan::pasted_paths(&text)?,
                                     self.remote.path.clone(),
-                                ))?;
+                                    PlanMode::Review,
+                                    None,
+                                )?;
                             }
                             EditKind::Rename => {
                                 if let Some(Modal::Review { mut jobs, cursor }) =
@@ -915,6 +1081,8 @@ impl App {
                 }
             }
             KeyCode::Tab => self.pane = 1 - self.pane,
+            KeyCode::Left => self.pane = 0,
+            KeyCode::Right => self.pane = 1,
             KeyCode::Char('.')
                 if !control
                     && !key.modifiers.contains(KeyModifiers::ALT)
@@ -1027,10 +1195,11 @@ impl App {
                 );
             }
             KeyCode::Char(character) if !control && !key.modifiers.contains(KeyModifiers::ALT) => {
-                if self.current().filter.len() < 1024 {
-                    self.current_mut().filter.push(character);
-                    self.current_mut().refilter();
-                }
+                self.modal = Some(Modal::Edit {
+                    kind: EditKind::Paste,
+                    text: character.to_string(),
+                });
+                self.note("Unframed text is a path draft, not a detected drop. F5 reviews; F9 starts. F3 edits the filter.");
             }
             _ => {}
         }
@@ -1062,11 +1231,25 @@ impl App {
                 text.push_str(&value);
             }
             None => {
-                self.check_queue_available()?;
-                self.modal = Some(Modal::Edit {
-                    kind: EditKind::Paste,
-                    text: value,
-                });
+                match plan::atomic_paths(&value).and_then(|sources| {
+                    self.plan_upload(
+                        sources,
+                        self.remote.path.clone(),
+                        PlanMode::StartOnReady,
+                        Some(value.clone()),
+                    )
+                }) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        self.modal = Some(Modal::Edit {
+                            kind: EditKind::Paste,
+                            text: value,
+                        });
+                        self.note(format!(
+                            "Paths kept as a draft: {error:#}. F5 reviews; F9 starts."
+                        ));
+                    }
+                }
             }
             _ => {}
         }
@@ -1389,6 +1572,122 @@ mod tests {
             .unwrap();
         assert!(app.local_job.is_none() && app.transfer.is_none());
         assert!(matches!(app.modal, Some(Modal::Edit { .. })));
+    }
+    #[test]
+    fn arrows_choose_panes_and_unframed_text_never_becomes_a_filter() {
+        let mut app = app();
+        for code in [KeyCode::Right, KeyCode::Right] {
+            app.key(KeyEvent::new(code, KeyModifiers::NONE)).unwrap();
+            assert_eq!(app.pane, 1);
+        }
+        app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.pane, 0);
+        for ch in "C:\\a path.txt".chars() {
+            app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+                .unwrap();
+        }
+        assert!(
+            matches!(&app.modal, Some(Modal::Edit {kind:EditKind::Paste,text}) if text == "C:\\a path.txt")
+        );
+        app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.pane, 0, "Editor arrows must not change the target pane");
+        assert!(
+            app.local.filter.is_empty() && app.remote.filter.is_empty() && app.local_job.is_none()
+        );
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        app.key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE))
+            .unwrap();
+        app.paste("exact filter".into()).unwrap();
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.local.filter, "exact filter");
+    }
+    fn planned_job() -> Job {
+        Job {
+            direction: Direction::Upload,
+            directory: false,
+            source: "source".into(),
+            destination: "/frozen/file".into(),
+            bytes: 1,
+        }
+    }
+    #[test]
+    fn automatic_plan_requires_matching_generation_and_both_revisions_and_is_once_only() {
+        for invalid in [
+            "none",
+            "generation",
+            "source",
+            "destination",
+            "cancel",
+            "queue-limit",
+        ] {
+            let mut app = app();
+            app.local_ready = true;
+            app.remote_ready = true;
+            app.local_generation = 8;
+            app.remember_plan(true, PlanMode::StartOnReady, None);
+            if invalid == "source" {
+                app.local.refilter();
+            }
+            if invalid == "destination" {
+                app.remote.refilter();
+            }
+            if invalid == "cancel" {
+                app.cancel();
+            }
+            let jobs = if invalid == "queue-limit" {
+                vec![planned_job(); paths::QUEUE_LIMIT + 1]
+            } else {
+                vec![planned_job()]
+            };
+            app.finish_plan(true, if invalid == "generation" { 7 } else { 8 }, Ok(jobs));
+            assert_eq!(app.queue.len(), usize::from(invalid == "none"), "{invalid}");
+            if invalid == "none" {
+                app.queue.clear();
+                app.finish_plan(true, 8, Ok(vec![planned_job()]));
+                assert!(app.queue.is_empty());
+            }
+        }
+    }
+    #[tokio::test]
+    async fn invalid_atomic_paste_preserves_draft_and_cancelled_planner_cannot_start() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().canonicalize().unwrap().join("missing.txt");
+        let mut app = app();
+        app.local_ready = true;
+        app.remote_ready = true;
+        let text = format!("\"{}\"", source.display());
+        app.paste(text.clone()).unwrap();
+        assert!(app.plan_intent.is_some());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.local_job.is_some() && Instant::now() < deadline {
+            app.collect().await;
+            tokio::task::yield_now().await;
+        }
+        assert!(app.local_job.is_none());
+        assert!(
+            matches!(&app.modal, Some(Modal::Edit {kind: EditKind::Paste,text: kept}) if kept == &text)
+        );
+        assert!(app.queue.is_empty() && app.transfer.is_none());
+        app.modal = None;
+        std::fs::write(&source, b"owned").unwrap();
+        app.paste(text).unwrap();
+        let cancel = app.local_job.as_ref().unwrap().cancel.clone();
+        app.cancel();
+        assert!(cancel.load(Ordering::Acquire));
+        while app.local_job.is_some() && Instant::now() < deadline {
+            app.collect().await;
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            app.local_job.is_none()
+                && app.plan_intent.is_none()
+                && app.queue.is_empty()
+                && app.transfer.is_none()
+        );
     }
     #[test]
     fn review_enter_and_repeated_prepare_cannot_start_queue() {

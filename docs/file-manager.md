@@ -1,24 +1,25 @@
 # File-manager features
 
-This is the working scope for the next release. The released 0.2 browser has
-hidden-file controls, mouse selection and transfers; select-all, sorting and
-standalone folder creation are new changes under qualification.
+This branch adds pane focus and direct transfer gestures to the released 0.3
+browser. Its new behavior is under qualification and is not in the 0.3 assets.
 
 | Task | Current behavior |
 | --- | --- |
 | Choose a server and saved folder | `ssh-sessions files` in SSH Sessions 0.8 opens a group → server → saved-path chooser. Standalone Files takes an explicit `--host`. |
-| Browse both computers | Separate local and remote panes, typed filters, path entry, refresh and parent-folder navigation. |
+| Browse both computers | Left focuses Local, Right Remote; Up/Down select. F3 explicitly edits filters; path entry, refresh and parent-folder navigation remain available. |
 | Hidden files | Hidden initially; `.` toggles them. Local Windows hidden attributes are respected. |
 | Mouse navigation | Wheel targets its pane; click selects, double-click opens folders. |
 | Select a batch | Space, Ctrl-click, Shift-click or drag within a pane. Ctrl+A selects its filtered list; Ctrl+Shift+A clears marks. Maximum 1,000 entries. |
 | Sort | Ctrl+O cycles name and size, ascending and descending. Folders stay first; selection follows the same entry. |
 | Create a folder | Insert opens a form in the selected pane; F9 confirms. Enter does not create it. Existing entries are kept. |
 | Upload/download folders | Review a recursive batch, then start its serial queue. Hidden children are included; links and special files are rejected. |
+| Drag between panes | Release on a safe folder or blank file-list space in the other pane to upload/download directly through the bounded, no-overwrite queue. Same-pane drag still selects a range. |
 | Progress and cancellation | Browse during transfer; Esc stops work. F4 shows partials and uncertain results. Closing Files stops its own connections. |
 | Existing destination | Pause and choose a different copy name or skip. No overwrite mode. |
 | Reconnect | F8 reconnects the browser. Failed transfers require an explicit decision; no automatic retry of an uncertain write. |
 | Copy a path | F7 requests the terminal's clipboard support. Terminal policy determines whether it succeeds. |
-| Drag from Explorer/Finder into Files | Not implemented as an OS drop feature. F6 accepts pasted paths and opens a transfer review. |
+| Paste complete local paths | A complete atomic absolute-path paste outside an editor requests direct upload to the current remote folder. F6 remains the manual review flow. |
+| Drag from Explorer/Finder into Files | Actual OS gesture remains unqualified. Unframed text opens a literal path draft instead of filtering; F5/F9 reviews/starts it. The Windows input adapter is still pending. |
 | Drag from Files into another app | Not implemented. Download to the local pane first, then use the local file manager. |
 | Rename or delete an existing file | Not implemented. F2 and Delete in the queue change or skip a proposed copy; they do not manage existing files. Use an SSH shell or another SFTP client for maintenance. |
 | Open/edit a remote file | No editor integration or upload-on-save. Download, edit locally, then upload under a new name; replacing the original requires deliberate external maintenance. |
@@ -28,8 +29,9 @@ standalone folder creation are new changes under qualification.
 
 The mouse gestures above operate **inside the file list**. They do not establish
 drag-and-drop between applications. Windows Terminal can deliver pasted text as
-individual keys, which is why F6 has a dedicated editor and transfers need a
-separate review/start action.
+individual keys, which are kept in a dedicated draft requiring a separate
+review/start action. Atomic path paste can request direct upload, but that event
+does not prove whether the owner pasted or dragged it.
 
 Existing-file maintenance, editor integration and resumed writes need different
 conflict and recovery behavior from a new-file transfer. The current queue does
