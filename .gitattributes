@@ -1,0 +1,6 @@
+# Shared release notices and versioned beta scripts must have identical bytes
+# across all five build runners and raw.githubusercontent.com.
+/LICENSE text eol=lf
+/docs/licenses/THIRD_PARTY_NOTICES.txt text eol=lf
+/install-beta.ps1 text eol=lf
+/install-beta.sh text eol=lf

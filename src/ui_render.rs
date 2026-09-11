@@ -199,6 +199,16 @@ fn pane(frame: &mut Frame, area: Rect, pane: &Pane, title: &str, active: bool, b
     );
 }
 
+fn release_label() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let channel = if version.contains("-beta.") {
+        " BETA"
+    } else {
+        ""
+    };
+    format!("SSH FILES{channel} {version}")
+}
+
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     frame.render_widget(
@@ -206,14 +216,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         area,
     );
     let Some(parts) = layout(area) else {
-        frame.render_widget(Paragraph::new("SSH Files\nMake this terminal at least 60 columns × 16 rows.\nF10 closes; Esc cancels active work.").wrap(Wrap { trim: false }), area);
+        frame.render_widget(Paragraph::new(format!("{}\nMake this terminal at least 60 columns × 16 rows.\nF10 closes; Esc cancels active work.", release_label())).wrap(Wrap { trim: false }), area);
         return;
     };
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(
-                    " SSH FILES ",
+                    format!(" {} ", release_label()),
                     Style::default()
                         .fg(BACK)
                         .bg(BLUE)

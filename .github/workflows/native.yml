@@ -30,6 +30,15 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
+      - name: Exact package, lock, channel and optional tag identity
+        id: identity
+        shell: bash
+        run: |
+          args=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then args+=(--tag "$GITHUB_REF_NAME"); fi
+          python scripts/release_metadata.py "${args[@]}" --github-output "$GITHUB_OUTPUT"
+      - name: Release identity and payload regression checks
+        run: python tests/release_metadata.py
       - name: Prepare compiler
         run: rustup toolchain install 1.94.0 --profile minimal --component clippy --component rustfmt --target ${{ matrix.target }}
       - name: Prepare static Linux linker and disposable SSH server
@@ -50,11 +59,22 @@ jobs:
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
       - name: Fresh compiled install, update, checksum and environment checks
+        if: steps.identity.outputs.channel == 'stable'
         shell: bash
         run: |
           binary=target/${{ matrix.target }}/release/ssh-files
           if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
           python scripts/check_native_install.py --binary "$binary" --with-path
+      - name: Explicit beta isolation, update and rollback fixtures
+        if: steps.identity.outputs.channel == 'beta'
+        shell: bash
+        run: |
+          binary=target/${{ matrix.target }}/release/ssh-files
+          if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
+          python scripts/check_beta_install.py --binary "$binary" --report artifacts/beta-install.json
+          if [ "$RUNNER_OS" = Windows ]; then
+            python scripts/check_beta_install.py --binary "$binary" --powershell pwsh --report artifacts/beta-install-ps7.json
+          fi
       - name: Actual OpenSSH transfers, UI, bracketed paste and terminal-close cleanup
         if: runner.os == 'Linux'
         run: python scripts/check_linux.py --binary target/${{ matrix.target }}/release/ssh-files-proof --ui-binary target/${{ matrix.target }}/release/ssh-files --sudo-sshd --adversarial --report artifacts/linux-transport.json
@@ -63,17 +83,21 @@ jobs:
         run: python scripts/check_linux.py --binary target/${{ matrix.target }}/release/ssh-files-proof --sudo-sshd --lost-ack --report artifacts/linux-lost-ack.json
       - name: Package only the tested UI binary, checksum and licenses
         run: python scripts/package_native.py --target '${{ matrix.target }}'
+      - name: Record the successful exact source and target gates
+        run: python scripts/release_metadata.py --qualify '${{ matrix.target }}'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
       - name: Preserve fixture results
-        if: always() && runner.os == 'Linux'
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: checks-${{ matrix.target }}
-          path: artifacts/linux-*
+          path: |
+            artifacts/linux-*
+            artifacts/beta-install*.json
           if-no-files-found: ignore
   prerelease:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -83,15 +107,20 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
+      - name: Verify all five exact payloads and freeze release record
+        run: python scripts/release_metadata.py --record --tag "$GITHUB_REF_NAME"
       - name: Publish immutable prerelease assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --prerelease --title "SSH Files $GITHUB_REF_NAME beta" --notes-file "docs/releases/${GITHUB_REF_NAME#v}.md"
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --prerelease --latest=false --title "SSH Files $GITHUB_REF_NAME beta" --notes-file "docs/releases/${GITHUB_REF_NAME#v}.md"
   released-install:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: prerelease
@@ -108,9 +137,18 @@ jobs:
           python-version: '3.12'
       - name: Actual tagged HTTPS installer and update
         shell: bash
-        run: python scripts/check_release_install.py --version "${GITHUB_REF_NAME#v}" --report artifacts/released-install.json
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          if [[ "$version" == *-beta.* ]]; then
+            python scripts/check_beta_release.py --version "$version" --report artifacts/released-install.json
+            if [ "$RUNNER_OS" = Windows ]; then
+              python scripts/check_beta_release.py --version "$version" --powershell pwsh --report artifacts/released-install-ps7.json
+            fi
+          else
+            python scripts/check_release_install.py --version "$version" --report artifacts/released-install.json
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: installed-${{ matrix.os }}
-          path: artifacts/released-install.json
+          path: artifacts/released-install*.json
           if-no-files-found: error

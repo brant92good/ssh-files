@@ -145,6 +145,17 @@ impl Session {
             self.pump(Duration::from_millis(20));
         }
     }
+    fn expect_absent(&mut self, text: &str) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while self.parser.screen().contents().contains(text) {
+            assert!(
+                Instant::now() < deadline,
+                "Still visible {text:?}: {}",
+                self.parser.screen().contents()
+            );
+            self.pump(Duration::from_millis(20));
+        }
+    }
     fn clear_filter(&mut self) {
         self.filter("");
     }
@@ -228,6 +239,10 @@ fn owned_terminal_printable_input_and_failed_connection_remain_safe() {
     let local = root.path().canonicalize().unwrap();
     let mut session = Session::start(&config, &local, ".");
     session.expect("SSH FILES");
+    session.expect(env!("CARGO_PKG_VERSION"));
+    if env!("CARGO_PKG_VERSION").contains("-beta.") {
+        session.expect("BETA");
+    }
     session.expect("quit upload.txt");
     session.send("quit upload.txt\r");
     session.expect("Upload local paths");
@@ -373,7 +388,9 @@ fn actual_sftp_create_folder_has_explicit_confirmation_and_preserves_existing_en
         b"original bytes"
     );
     session.send("\x1b");
-    session.expect("F6 paste paths");
+    // The footer also exists beneath the modal. Observe its actual dismissal
+    // before F3, so Unix does not receive adjacent ESC + ESC OR as one sequence.
+    session.expect_absent("Create remote folder");
     session.filter("folder 開發");
     session.send("\r");
     session.expect("0 shown");

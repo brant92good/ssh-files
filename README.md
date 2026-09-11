@@ -18,6 +18,9 @@ aliases; SSH Sessions can supply its machine catalog and the route for this devi
 > pane focus, direct transfers between panes, and complete path-paste uploads.
 > These changes are not in the 0.3.0 download below. Actual Explorer drop handling
 > is still pending; Windows text delivered as separate keys opens a manual draft.
+> The [explicit beta installer](docs/beta-install.md) targets 0.4.0-beta.1 in a
+> separate directory. Its immutable release and HTTPS gates are distinct from
+> this source branch; the normal 0.3.0 commands below are unchanged.
 
 ## What it does
 
