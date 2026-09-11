@@ -1,11 +1,54 @@
 # Verification and limits
 
+## Released 0.2.0 browser
+
+[The 0.2.0 native run](https://github.com/brant92good/ssh-files/actions/runs/34521127347)
+passed all eleven jobs: five native build/package jobs, publication and five
+actual HTTPS installer jobs. This covers the hidden-file controls and mouse
+selection in commit `5345a18874f6448e42a2e6c1de053b32bfdcc48b`.
+
+An independent Windows replay downloaded the released binary and matched both
+its sidecar checksum and GitHub asset digest:
+`2bcf7a42d869c9e4df63dc8a8abb1bda3253b110f42f7c4a1e41a72a8e3d412a`.
+All six ordinary/explicit SFTP ConPTY cases passed in that replay, including
+remote mouse navigation, hidden entries, transfers, collisions and cancellation.
+Both PowerShell 5.1 and 7 HTTPS install/update/tamper checks passed in isolated
+directories. This does not qualify actual Explorer dragging or macOS desktop use.
+
+## Next release: file-manager controls
+
+The development branch adds Ctrl+A selection, Ctrl+O sorting, an Insert/F9
+create-folder form, and scrollable help. Forty-four active Windows checks passed,
+including actual ConPTY Ctrl+Shift+A and the final help row at 60×16. A separate
+real SFTP case created a Unicode folder, refused an existing destination and
+navigated into the result. These are source tests, not a 0.3.0 publication or
+installation claim. The independent source review passed after finding and
+fixing unfinished-worker reporting and small-window help bounds. A Windows
+OpenSSH fault relay then withheld the successful MKDIR response after actually
+creating the folder. Both Esc cancellation and F10 closure retained its path,
+kept the created folder and stopped the captured SSH/relay/server processes.
+The two-case run passed in 6.05 seconds. This new check has not run on Unix.
+
+## Historical 0.1.0 transport qualification
+
 The [0.1.0 beta release](https://github.com/brant92good/ssh-files/releases/tag/v0.1.0)
 contains five compiled UI binaries. The release workflow tests and packages each
 one, publishes immutable assets, then exercises the tagged HTTPS installer on
 Windows, both Linux architectures, and both macOS architectures.
 [The tagged release run](https://github.com/brant92good/ssh-files/actions/runs/34450038417)
 passed all eleven jobs at commit `e8cde5f`.
+
+## Browser development checks before 0.2.0 publication
+
+The development branch adds hidden-file filtering and mouse selection. Its
+Windows suite passes 38 active tests, including a real ConPTY mouse sequence
+for range selection, pane-specific scrolling, resizing, dialog isolation and
+folder navigation. Three actual loopback SFTP UI tests also pass, including
+remote mouse navigation, hidden entries, transfer integrity and interruption
+cleanup. The 1,000-entry range limit and stale-anchor checks have model tests.
+This was development evidence before the 0.2.0 release qualification above.
+Direct desktop mouse behavior remains unqualified. OS file drag-in and drag-out
+are not implemented.
 
 ## What was exercised
 
@@ -15,7 +58,7 @@ passed all eleven jobs at commit `e8cde5f`.
 | Linux x64 / ARM64 | Musl UI; real PTY and OpenSSH file transfers, bracketed paste, terminal EOF and SIGTERM cleanup; actual HTTPS installs |
 | macOS Apple silicon / Intel | Native build, library and ordinary PTY tests, Clippy, packaging and actual HTTPS installs; desktop use remains beta |
 
-The published Windows binary was also replayed locally through the hidden
+The published 0.1.0 Windows binary was also replayed locally through the hidden
 ConPTY fixture: both actual SFTP tests passed in 22.75 s. Its SHA-256 is
 `591f7609d470ca970b59df0212cf904a74af8474fcb2ae594ef65955220a51f3`,
 matching the release sidecar and the separately exercised tagged installer.

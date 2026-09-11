@@ -11,7 +11,7 @@ import tempfile
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--version',default='0.1.0')
+    parser.add_argument('--version',default='0.3.0')
     parser.add_argument('--ref')
     parser.add_argument('--report',type=Path)
     args=parser.parse_args()

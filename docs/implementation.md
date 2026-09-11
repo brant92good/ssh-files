@@ -35,9 +35,46 @@ with F5 building the review. This matters because crossterm on Windows does not
 provide an atomic Event::Paste. Main printable keys must not execute mutations
 or quit. F1 opens help and F10/Ctrl+Q closes after confirming active transfers.
 Show file names, types, sizes, completed/remaining items and active byte progress.
+Hidden entries are off by default in both panes. With an empty filter, `.` toggles
+them; inside a filter/editor the period remains literal text. F3 edits a filter
+that starts with a period. Local listings flag dotnames and Windows hidden
+attributes in the existing worker; SFTP listings flag dotnames. Filtering changes
+only the view: a selected folder's recursive transfer still includes its hidden
+contents. Filtering removes now-invisible marks, and reloads preserve hidden
+visibility preference. The footer shows hidden on/off.
+
+Pointer hit tests use the renderer's exact file-list rectangles and stored
+viewport offsets, excluding headers, path lines, footers and dialogs. Anchors
+identify a pane, directory, full entry name and listing/filter revision. Mouse
+events request a redraw before another mouse event is read. A new mapping,
+keyboard event, resize or dialog invalidates gestures; wheel scrolling may keep
+an active drag within its original pane. Double-click opens only the same safe
+directory within 400 ms. Ctrl toggles a mark; Shift and drag build a complete
+candidate set before enforcing the 1,000-entry limit, then replace the marks
+atomically. Rejected entries are excluded. Mouse capture is restored before raw
+mode on Windows, reversing capture's saved-console-mode order.
+
 A bounded queue contains at most 1,000 items; only one transfer runs. Esc cancels
 the current operation/queue. Pasted paths are data and reviewed before upload;
 they are not native drag-out support or shell commands.
+
+Standalone folder creation has a separate frozen request and worker result;
+it cannot complete or start a transfer queue item. Insert opens the form and
+F9 confirms a validated single portable child. The worker checks parent and
+destination, then uses create-new mkdir. No existing entry is accepted as a
+successful creation. Cancellation after mutation begins retains the destination
+as uncertain. Shutdown also retains an unfinished worker's destination even
+when its mutation flag is still false: lack of that flag does not prove a
+running worker cannot write later. Only an observed pre-write failure can say
+the folder was not created. The existing local worker slot remains occupied
+until the actual blocking closure completes.
+
+Ctrl+A builds the entire supported filtered selection before applying its cap.
+Sorting keeps folders first and restores the selected name while retaining
+marks. Both change the pane revision, ending stale pointer gestures. Rendered
+filter footers and pointer geometry share the same variable row count. Help
+lines fit the smallest supported popup, and its scroll limit follows the
+actual popup height.
 
 Use bounded request/result channels or one retained job handle per worker, and
 a latest-value watch for progress. Cancel/quit use a separate watch/atomic path;

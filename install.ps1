@@ -1,6 +1,6 @@
 param(
     [string]$InstallDir = $env:SSH_FILES_INSTALL_DIR,
-    [string]$Version = $(if ($env:SSH_FILES_VERSION) { $env:SSH_FILES_VERSION } else { '0.1.0' }),
+    [string]$Version = $(if ($env:SSH_FILES_VERSION) { $env:SSH_FILES_VERSION } else { '0.3.0' }),
     [string]$Binary = $env:SSH_FILES_BINARY,
     [string]$Sha256 = $env:SSH_FILES_SHA256,
     [switch]$NoPath = ($env:SSH_FILES_NO_PATH -eq '1')

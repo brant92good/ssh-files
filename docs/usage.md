@@ -40,9 +40,49 @@ the filter. Space marks an entry; when nothing is marked, F5 uses the highlighte
 entry. An exclamation mark identifies an unsupported name or file type; F4
 explains it.
 
+Ctrl+A selects all supported entries in the current filtered list, including
+rows outside the viewport; Ctrl+Shift+A clears its marks. A selection over
+1,000 entries is rejected without changing the previous selection. Ctrl+O cycles
+name and size sorting in both directions, with folders first. Each pane keeps
+its own sort for this view. Sorting preserves the selected entry and marks.
+Inside an editor, Ctrl+A continues to clear its text.
+
+Dotfiles are hidden by default; local Windows hidden attributes are respected
+too. Press `.` with an empty filter to show or hide them in both panes. Use F3
+when you want to type a filter beginning with a period. Hiding an entry removes
+its mark. Selecting a folder still includes its hidden contents when scanning
+that folder for transfer.
+
+The mouse wheel scrolls the pane under the pointer. Click selects an entry;
+double-click opens a folder. Ctrl-click toggles one mark, while Shift-click or
+dragging selects a range. A range stays within one pane and cannot exceed 1,000
+entries. Rejected entries are skipped. To extend a drag beyond the visible list,
+use the wheel while holding the button; moving beyond the edge alone does not
+scroll. Keyboard input, filtering, refresh, dialogs and resizing end the current
+gesture. Mouse actions inside dialogs are ignored. These controls select entries
+inside Files; they do not drag files to or from another application.
+
 F8 refreshes the active pane and reconnects its browser if needed. The browser
 and transfer queue are independent; a browser refresh does not restart or stop
 the transfer.
+
+## Create a folder
+
+Press Insert in the desired pane, enter a single folder name and press F9.
+The form shows the parent directory and accepts spaces and Unicode; separators
+and names reserved by Windows are rejected on both sides. Enter does not create
+anything. Esc closes the form. Folder creation is available only when other work is idle
+and never replaces an existing entry.
+
+![Create folder form before confirmation](assets/create-folder.svg)
+
+*Native widgets with example paths; this capture creates no folder.*
+
+Creation runs in the filesystem or SSH worker, so the browser stays responsive.
+If cancellation or a lost response leaves the result uncertain, F4 and the exit
+report retain the destination path. Refresh and check it before retrying. Path
+checks reject observed links and reparse points; they cannot atomically prevent
+another program from replacing an ancestor during an operation.
 
 ## Review and transfer
 
@@ -91,3 +131,6 @@ F7 asks the terminal to copy the highlighted entry's path, or the open directory
 if the pane is empty. It uses OSC52; clipboard permission and terminal support
 determine whether copying succeeds. It does not read the clipboard. F4 shows
 connection and entry details. Native drag-out is not implemented.
+
+See the [file-manager feature inventory](file-manager.md) for existing-file
+maintenance, editing, drag/drop and resume limitations.

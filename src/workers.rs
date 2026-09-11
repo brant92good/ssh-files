@@ -18,11 +18,13 @@ pub enum LocalAction {
     List(PathBuf),
     Plan(Vec<PathBuf>, String),
     Directory(PathBuf),
+    CreateFolder(crate::folders::Request, Arc<AtomicBool>),
 }
 pub enum LocalValue {
     Listing(Listing),
     Plan(Vec<Job>),
     Directory,
+    CreatedFolder(String),
 }
 pub struct LocalJob {
     pub generation: u64,
@@ -38,6 +40,9 @@ impl LocalJob {
         let task = tokio::task::spawn_blocking(move || {
             ensure!(!flag.load(Ordering::Acquire), "Local operation cancelled");
             match action {
+                LocalAction::CreateFolder(request, started) => Ok(LocalValue::CreatedFolder(
+                    crate::folders::create_local(&request, &flag, &started)?,
+                )),
                 LocalAction::List(path) => Ok(LocalValue::Listing(crate::browser::list_local(
                     &path, &flag,
                 )?)),
@@ -83,11 +88,13 @@ pub enum RemoteAction {
     List(String),
     Plan(Vec<String>, PathBuf),
     Directory(String),
+    CreateFolder(crate::folders::Request, Arc<AtomicBool>),
 }
 pub enum RemoteValue {
     Listing(Listing),
     Plan(Vec<Job>),
     Directory,
+    CreatedFolder(String),
 }
 pub struct RemoteJob {
     pub generation: u64,
@@ -129,6 +136,7 @@ impl RemoteJob {
                 _ = cancelled(&mut receiver) => Err(anyhow::anyhow!("Remote operation cancelled")),
                 result = async {
                     match action {
+                        RemoteAction::CreateFolder(request,started)=>Ok(RemoteValue::CreatedFolder(crate::folders::create_remote(&browser,&request,&started).await?)),
                         RemoteAction::List(path) => Ok(RemoteValue::Listing(browser.list(&path).await?)),
                         RemoteAction::Plan(sources, local) => Ok(RemoteValue::Plan(plan::download(&browser, &sources, &local).await?)),
                         RemoteAction::Directory(path) => { browser.create_directory(&path).await?; Ok(RemoteValue::Directory) },

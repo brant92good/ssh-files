@@ -1,8 +1,10 @@
 pub mod browser;
 mod connection;
+pub mod folders;
 pub mod framing;
 pub mod paths;
 pub mod plan;
+mod pointer;
 mod process;
 pub use process::Registry as ProcessRegistry;
 mod clipboard;
