@@ -247,6 +247,16 @@ fn owned_terminal_printable_input_and_failed_connection_remain_safe() {
     session.send("quit upload.txt\r");
     session.expect("Upload local paths");
     session.expect("quit upload.txt");
+    // Consume the complete modal frame; a partial frame can still contain
+    // transfer counters that the opaque editor is about to cover.
+    session.settle();
+    assert!(
+        session
+            .parser
+            .screen()
+            .contents()
+            .contains("Upload local paths")
+    );
     assert!(
         !session
             .parser
@@ -255,7 +265,11 @@ fn owned_terminal_printable_input_and_failed_connection_remain_safe() {
             .contains("filter: quit upload.txt")
     );
     assert!(session.child.try_wait().unwrap().is_none());
-    assert!(session.parser.screen().contents().contains("0 complete"));
+    session.send("\x1b");
+    session.expect_absent("Upload local paths");
+    session.expect("0 complete");
+    session.expect("0 waiting");
+    session.expect("Select files in either pane. F5 reviews; F9 starts after review.");
     session.exit();
 }
 
@@ -387,9 +401,9 @@ fn actual_sftp_create_folder_has_explicit_confirmation_and_preserves_existing_en
         std::fs::read(target.path().join("kept.txt")).unwrap(),
         b"original bytes"
     );
-    session.send("\x1b");
-    // The footer also exists beneath the modal. Observe its actual dismissal
-    // before F3, so Unix does not receive adjacent ESC + ESC OR as one sequence.
+    // F9 consumed the modal before starting the asynchronous mkdir request.
+    // Its collision error is on the main view, so no extra Esc is needed.
+    // Sending redundant Esc immediately before F3 joins ESC + ESC OR on Unix.
     session.expect_absent("Create remote folder");
     session.filter("folder 開發");
     session.send("\r");
